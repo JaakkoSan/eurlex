@@ -1,0 +1,16 @@
+{
+  "name": "eurlex-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "EUR-Lex MCP -palvelin Cloudflare Workersissa: EU-säädösten teksti ja tiedot EU:n julkaisutoimiston avoimesta datasta.",
+  "license": "MIT",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node test/smoke.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

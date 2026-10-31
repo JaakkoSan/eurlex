@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "eurlex-mcp",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+  "observability": { "enabled": true },
+  // Pyyntöjen sisältöä ei tallenneta mihinkään. Välimuisti: Cloudflaren Cache API.
+  // Valinnainen salainen polku: aseta salaisuus MCP_PATH_SECRET (wrangler secret put MCP_PATH_SECRET),
+  // jolloin osoite on /mcp/<salaisuus> eikä pelkkä /mcp.
+  "workers_dev": true,
+  // Käyttörajoitus työkalukutsuille (ks. src/index.js). period: 10 tai 60 sekuntia.
+  "ratelimits": [
+    { "name": "SESSION_LIMITER", "namespace_id": "1301", "simple": { "limit": 30, "period": 60 } },
+    { "name": "IP_LIMITER", "namespace_id": "1302", "simple": { "limit": 300, "period": 60 } }
+  ]
+}
