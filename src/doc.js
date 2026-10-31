@@ -15,7 +15,7 @@
 
 import { parseXml, find, elements, textOf, decodeEntities } from "./xml.js";
 
-export const DOC_INDEX_VERSION = 1;
+export const DOC_INDEX_VERSION = 2;
 
 const BLOCK = new Set([
   "p", "div", "table", "tbody", "thead", "tfoot", "tr", "td", "th", "ul", "ol", "li", "dl", "dt", "dd",

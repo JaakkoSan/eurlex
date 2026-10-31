@@ -24,3 +24,4 @@ Oma Claude-liitin EU-säädöksille. Tehty 31.10.2026 Finlex-liittimen mallilla.
 ## Muutokset
 
 - 31.10.2026 v1.0: hae_eu_saadoksia, eu_saados_tiedot, hae_eu_artikla, etsi_eu_saadoksesta.
+- 31.10.2026 v1.0.1: säädöksen tunnistus, perustiedot ja versiot yhtenä välimuistimerkintänä; sisällysluettelo omana osanaan (vähemmän välimuistilukuja kutsua kohden, tuotannossa artiklahaku oli 7–12 ms).

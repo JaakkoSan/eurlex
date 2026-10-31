@@ -210,15 +210,28 @@ async function loadDoc(celex, lang) {
       shards.at(-1).push(t);
       n += t.length;
     }
-    const b = { ...idx.base, shardStarts: starts };
-    await putDerived([[partKey(celex, lang, "base"), b], ...shards.map((s, i) => [partKey(celex, lang, `p${i}`), s])], DOC_TTL);
-    return { base: b, shards };
+    // Sisällysluettelo on oma osansa: artiklahaku ei tarvitse sitä.
+    const { toc, ...rest } = idx.base;
+    const b = { ...rest, shardStarts: starts };
+    await putDerived(
+      [[partKey(celex, lang, "base"), b], [partKey(celex, lang, "toc"), toc], ...shards.map((s, i) => [partKey(celex, lang, `p${i}`), s])],
+      DOC_TTL,
+    );
+    return { base: b, shards, toc };
   };
   if (!base || base.v !== DOC_INDEX_VERSION) {
     built = await build();
     base = built.base;
   }
   const doc = { celex, lang, base };
+  doc.toc = async () => {
+    if (built) return built.toc;
+    const t = await getDerived(partKey(celex, lang, "toc"), DOC_TTL);
+    if (t !== undefined) return t;
+    built = await build();
+    doc.base = built.base;
+    return built.toc;
+  };
   /** Kappaleet väleiltä [[s, e], ...]. */
   doc.paras = async (ranges) => {
     const starts = doc.base.shardStarts;
@@ -285,11 +298,22 @@ function legendFor(base, text) {
   return "Muutosmerkinnät (▼ alkaa, ►…◄ rajaa muutetun kohdan; B = alkuperäinen, M = muutos, A = liittymisasiakirja, C = oikaisu):\n" + lines.join("\n");
 }
 
+const ACT_TTL = 6 * 3600;
+
+/**
+ * Säädöksen tunnistus, perustiedot ja versiot. Tallennetaan yhtenä välimuistimerkintänä
+ * viitteen mukaan, jotta kutsu tekee yhden välimuistiluvun kolmen SPARQL-vastauksen sijaan.
+ */
 async function loadAct(args) {
   const lang = asLang(args.kieli);
+  const ref = String(args.saados ?? "").trim().toUpperCase().replace(/\s+/g, " ");
+  const key = `https://publications.europa.eu/resource/celex/_act?ref=${encodeURIComponent(ref)}&type=${args.tyyppi ?? ""}&lang=${lang}&v=1`;
+  const hit = await getDerived(key, ACT_TTL);
+  if (hit) return { lang, ...hit };
   const celex = await resolveAct(args);
   const [info, versions] = await Promise.all([workInfo(celex, lang), consolidatedVersions(celex)]);
   if (!info) throw new UserError(`Säädöksen ${celex} tietoja ei löytynyt.`);
+  await putDerived([[key, { celex, info, versions }]], ACT_TTL);
   return { lang, celex, info, versions };
 }
 
@@ -354,7 +378,7 @@ async function euSaadosTiedot(args) {
     "",
     `Rakenne: ${b.articles.length} artiklaa, ${b.annexes.length} liitettä${b.recitals.length ? `, ${b.recitals.length} johdanto-osan perustelukappaletta` : ""}.`,
     "Sisällys:",
-    b.toc || "(sisällysluetteloa ei saatu muodostettua)",
+    (await doc.toc()) || "(sisällysluetteloa ei saatu muodostettua)",
   );
   return clip(out.join("\n"));
 }

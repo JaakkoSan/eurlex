@@ -2,7 +2,7 @@
 
 import { TOOLS, callTool } from "./tools.js";
 
-const SERVER_INFO = { name: "eurlex", version: "1.0.0" };
+const SERVER_INFO = { name: "eurlex", version: "1.0.1" };
 const SUPPORTED_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
 const INSTRUCTIONS = `Tämä liitin hakee EU-säädösten (asetukset, direktiivit, päätökset) sanatarkan tekstin ja tiedot EU:n julkaisutoimiston avoimesta tietokannasta (Cellar, sama aineisto kuin EUR-Lexissä).
