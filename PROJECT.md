@@ -1,6 +1,6 @@
 # PROJECT.md: eurlex-mcp
 
-Oma Claude-liitin EU-säädöksille. Tehty 31.10.2026 Finlex-liittimen mallilla.
+Oma Claude-liitin EU-säädöksille ja EU-tuomioistuimen ratkaisuille. Tehty 31.10.2026 Finlex-liittimen mallilla.
 
 ## Päätökset
 
@@ -15,8 +15,8 @@ Oma Claude-liitin EU-säädöksille. Tehty 31.10.2026 Finlex-liittimen mallilla.
 
 - `src/index.js`: MCP-protokolla ja käyttörajoitus
 - `src/tools.js`: työkalujen määrittelyt ja toteutus, version valinta, hakemiston osat
-- `src/cellar.js`: säädösviitteen tulkinta, SPARQL-kyselyt, asiakirjan haku
-- `src/doc.js`: XHTML/HTML-asiakirjan jäsennys kappaleiksi ja hakemistoksi (artiklat, johdanto-osa, liitteet, sisällysluettelo, muutosmerkintöjen selite)
+- `src/cellar.js`: säädös- ja tuomioviitteen tulkinta, SPARQL-kyselyt, asiakirjan haku
+- `src/doc.js`: XHTML/HTML-asiakirjan jäsennys kappaleiksi ja hakemistoksi (artiklat, johdanto-osa, liitteet, sisällysluettelo, muutosmerkintöjen selite; tuomioista numeroidut kohdat, väliotsikot ja tuomiolauselma)
 - `src/http.js`: HTTP, Cache API ja isolaatin muistivälimuisti
 - `src/xml.js`: pieni XML-jäsennin (sama kuin Finlex-liittimessä)
 - `test/smoke.mjs`: savutesti oikeaa rajapintaa vasten
@@ -25,3 +25,4 @@ Oma Claude-liitin EU-säädöksille. Tehty 31.10.2026 Finlex-liittimen mallilla.
 
 - 31.10.2026 v1.0: hae_eu_saadoksia, eu_saados_tiedot, hae_eu_artikla, etsi_eu_saadoksesta.
 - 31.10.2026 v1.0.1: säädöksen tunnistus, perustiedot ja versiot yhtenä välimuistimerkintänä; sisällysluettelo omana osanaan (vähemmän välimuistilukuja kutsua kohden, tuotannossa artiklahaku oli 7–12 ms).
+- 31.10.2026 v1.1.0: EU-tuomioistuimen ratkaisut: hae_eu_tuomioita (tulkitun säädöksen ja artiklan mukaan tai otsikon sanoilla) ja eu_tuomio (tuomiolauselma, kohdat, sanahaku). Ennen vuotta 1999 annettujen asetusten numero kahdella vuosinumerolla (N:o 2913/92).

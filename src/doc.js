@@ -15,7 +15,7 @@
 
 import { parseXml, find, elements, textOf, decodeEntities } from "./xml.js";
 
-export const DOC_INDEX_VERSION = 2;
+export const DOC_INDEX_VERSION = 3;
 
 const BLOCK = new Set([
   "p", "div", "table", "tbody", "thead", "tfoot", "tr", "td", "th", "ul", "ol", "li", "dl", "dt", "dd",
@@ -41,10 +41,11 @@ function inlineText(el) {
  */
 function toParas(body) {
   const out = [];
+  let sig = 0;
 
   const push = (t, c, z) => {
     t = norm(t);
-    if (t) out.push({ t, c, z });
+    if (t) out.push({ t, c: sig ? "coj-signature" : c, z });
   };
 
   // Etuliite (esim. "1." tai "a)") lisätään ensimmäiseen kappaleeseen, joka syntyy tämän jälkeen.
@@ -80,7 +81,18 @@ function toParas(body) {
     const id = el.attrs?.id ?? "";
     const m = id.match(ELI_ID);
     if (m) z = `${m[1]}_${m[2]}`;
-    const c = cls(el);
+    // Tuomion allekirjoituslohkon kappaleet merkitään, jotta tuomiolauselma päättyy niihin.
+    const isSig = /(^|\s)(coj-)?signaturecase(\s|$)/.test(cls(el));
+    if (isSig) sig++;
+    try {
+      blockInner(el, z);
+    } finally {
+      if (isSig) sig--;
+    }
+  };
+
+  const blockInner = (el, z) => {
+    const c = sig ? "coj-signature" : cls(el);
 
     if (el.name === "tr") {
       const cells = elements(el).filter((x) => x.name === "td" || x.name === "th");
@@ -112,6 +124,14 @@ function toParas(body) {
   return out;
 }
 
+// HTML 4:n nimetyt merkit (Latin-1 ja yleisimmät typografiset), joita XML-entiteetit eivät kata.
+const LATIN1 = "nbsp iexcl cent pound curren yen brvbar sect uml copy ordf laquo not shy reg macr deg plusmn sup2 sup3 acute micro para middot cedil sup1 ordm raquo frac14 frac12 frac34 iquest Agrave Aacute Acirc Atilde Auml Aring AElig Ccedil Egrave Eacute Ecirc Euml Igrave Iacute Icirc Iuml ETH Ntilde Ograve Oacute Ocirc Otilde Ouml times Oslash Ugrave Uacute Ucirc Uuml Yacute THORN szlig agrave aacute acirc atilde auml aring aelig ccedil egrave eacute ecirc euml igrave iacute icirc iuml eth ntilde ograve oacute ocirc otilde ouml divide oslash ugrave uacute ucirc uuml yacute thorn yuml".split(" ");
+const HTML_ENT = Object.fromEntries(LATIN1.map((n, i) => [n, String.fromCharCode(160 + i)]));
+Object.assign(HTML_ENT, { ndash: "–", mdash: "—", lsquo: "‘", rsquo: "’", ldquo: "“", rdquo: "”", bdquo: "„", hellip: "…", euro: "€", bull: "•", Scaron: "Š", scaron: "š", Zcaron: "Ž", zcaron: "ž", OElig: "Œ", oelig: "œ" });
+function decodeHtml(s) {
+  return decodeEntities(s).replace(/&([a-zA-Z][a-zA-Z0-9]*);/g, (m, n) => HTML_ENT[n] ?? m);
+}
+
 /** Vanha HTML 4: kappaleet lohkotagien kohdalta. Rakenteen tunnistus tekstistä. */
 function legacyParas(html) {
   const bodyStart = html.search(/<body[^>]*>/i);
@@ -120,7 +140,7 @@ function legacyParas(html) {
   s = s.replace(/<\/?(p|div|br|tr|li|h[1-6]|table|blockquote)[^>]*>/gi, "\n");
   s = s.replace(/<\/t[dh]>/gi, " ");
   s = s.replace(/<[^>]+>/g, "");
-  return decodeEntities(s)
+  return decodeHtml(s)
     .split("\n")
     .map((t) => norm(t))
     .filter(Boolean)
@@ -144,7 +164,7 @@ function artNumber(t) {
  * Muodostaa hakemiston asiakirjan merkkijonosta.
  * Palauttaa { base, paras } tai null, jos asiakirjassa ei ole tekstiä.
  */
-export function buildDocIndex(text) {
+export function buildDocIndex(text, { judgment = false } = {}) {
   const isXml = /^\s*(<\?xml|<!DOCTYPE html PUBLIC "-\/\/W3C\/\/DTD XHTML)/i.test(text) || /<html[^>]+xmlns=/.test(text.slice(0, 2000));
   let paras;
   let format;
@@ -273,5 +293,39 @@ export function buildDocIndex(text) {
     }
   }
   base.title = paras.slice(0, 12).find((p) => DOC_TITLE_CLASS.test(p.c) || /hd-ti/.test(p.c))?.t ?? "";
+
+  // Tuomio: numeroidut kappaleet, tuomiolauselma ja väliotsikot.
+  if (judgment || paras.some((p) => /(^|\s)coj-/.test(p.c))) base.judgment = judgmentStructure(paras);
   return { base, paras: paras.map((p) => p.t) };
 }
+
+// ---------- Tuomiot ----------
+
+const OPERATIVE_START = /^(Näillä perusteilla|Mot denna bakgrund|På dessa grunder|On those grounds)/;
+const OPERATIVE_END = /^(Allekirjoitukset|Underskrifter|Signatures|Delivered in open court|Julistettu|Avkunnad|\( \*)/;
+
+/**
+ * Numeroidut kappaleet tunnistetaan järjestyksestä (1, 2, 3 …), jolloin esimerkiksi
+ * päivämäärärivi "16 päivänä heinäkuuta 2020" ei sekoitu niihin.
+ * Palauttaa { jp: kappaleen n indeksi = jp[n-1], op: [alku, loppu] | null, headings: [[indeksi, teksti]] }.
+ */
+function judgmentStructure(paras) {
+  const jp = [];
+  paras.forEach((p, i) => {
+    const m = p.t.match(/^(\d+) \S/);
+    if (m && +m[1] === jp.length + 1) jp.push(i);
+  });
+  const s = paras.findIndex((p) => OPERATIVE_START.test(p.t));
+  let op = null;
+  if (s >= 0) {
+    let e = s + 1;
+    while (e < paras.length && !OPERATIVE_END.test(paras[e].t) && paras[e].c !== "coj-signature") e++;
+    op = [s, e];
+  }
+  const headings = [];
+  paras.forEach((p, i) => {
+    if (/(^|\s)(coj-)?(title-grseq-[234]|sum-title-1)(\s|$)/.test(p.c) && p.t.length < 300) headings.push([i, p.t]);
+  });
+  return { jp, op, headings };
+}
+

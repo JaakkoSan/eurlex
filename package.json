@@ -1,6 +1,6 @@
 {
   "name": "eurlex-mcp",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "EUR-Lex MCP -palvelin Cloudflare Workersissa: EU-säädösten teksti ja tiedot EU:n julkaisutoimiston avoimesta datasta.",

@@ -30,7 +30,7 @@ function check(cond, label) {
 const init = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } });
 check(init.result?.serverInfo?.name === "eurlex", "initialize");
 const list = await rpc("tools/list", {});
-check(list.result?.tools?.length === 4, "tools/list (4 työkalua)");
+check(list.result?.tools?.length === 6, "tools/list (6 työkalua)");
 
 const show = process.argv.includes("-v");
 const cases = [
@@ -44,6 +44,11 @@ const cases = [
   ["hae_eu_artikla", { saados: "2016/679", artikla: "999" }, (t) => t.includes("ei löytynyt")],
   ["etsi_eu_saadoksesta", { saados: "2024/1689", hakusana: "tunteentunnistus" }, (t) => t.includes("Osumat")],
   ["hae_eu_artikla", { saados: "2016/679", artikla: "6", kieli: "sv" }, (t) => t.includes("förordning")],
+  ["hae_eu_tuomioita", { saados: "2016/679", artikla: "6" }, (t) => /\nC-\d+\/\d+ \(/.test(t) && t.includes("6 art. 1 kohta")],
+  ["hae_eu_tuomioita", { hakusana: "Schrems" }, (t) => t.includes("C-311/18")],
+  ["eu_tuomio", { tuomio: "C-311/18" }, (t) => t.includes("Tuomiolauselma") && t.includes("ECLI:EU:C:2020:559")],
+  ["eu_tuomio", { tuomio: "ECLI:EU:C:2020:559", kohdat: "134" }, (t) => t.includes("\n134 Tältä osin")],
+  ["eu_tuomio", { tuomio: "C-1/99" }, (t) => t.includes("Tuomiolauselma") && t.includes("Yhteisöjen")],
 ];
 
 for (const [name, args, pred] of cases) {

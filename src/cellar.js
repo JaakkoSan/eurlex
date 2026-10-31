@@ -233,11 +233,158 @@ export function eurlexUrl(celex, lang) {
 
 /** Ihmisluettava tunnus CELEX-numerosta: "asetus 2016/679". */
 export function shortId(celex) {
+  // Perussopimukset ja perusoikeuskirja (sektori 1): 12007P047 = perusoikeuskirjan 47 artikla.
+  const t = celex.match(/^1(\d{4})([PEM])(\d{3})?/);
+  if (t) {
+    const name = { P: "EU:n perusoikeuskirja", E: "SEUT (sopimus Euroopan unionin toiminnasta)", M: "SEU (sopimus Euroopan unionista)" }[t[2]];
+    return t[3] ? `${name}, ${+t[3]} art.` : name;
+  }
   const m = celex.match(/^3(\d{4})([RLD])(\d{4})$/);
   if (!m) return `CELEX ${celex}`;
-  // Ennen vuotta 2015 annetut asetukset numeroitiin muotoon N:o numero/vuosi.
-  if (m[2] === "R" && +m[1] < 2015) return `asetus N:o ${+m[3]}/${m[1]}`;
-  // Ennen vuotta 1999 direktiivien ja päätösten vuosi kirjoitettiin kahdella numerolla (93/13/ETY).
+  // Ennen vuotta 1999 vuosi kirjoitettiin kahdella numerolla (93/13/ETY, N:o 2913/92).
   const y = +m[1] < 1999 ? m[1].slice(2) : m[1];
+  // Ennen vuotta 2015 annetut asetukset numeroitiin muotoon N:o numero/vuosi.
+  if (m[2] === "R" && +m[1] < 2015) return `asetus N:o ${+m[3]}/${y}`;
   return `${TYPE_NAME[m[2]]} ${y}/${+m[3]}`;
+}
+
+// ---------- Oikeuskäytäntö (EU-tuomioistuin, CELEX-sektori 6) ----------
+
+const CASE_CELEX_RE = /^6(\d{4})(CJ|TJ|CO|TO|FJ|FO)(\d{4})$/;
+const CASE_NO_RE = /^([CTF])\s*[-‑–]\s*(\d{1,4})\s*\/\s*(\d{2}|\d{4})(?:\s*(?:P|RENV|REV))?$/i;
+const OWL = "http://www.w3.org/2002/07/owl#";
+
+/** Asianumero CELEX-numerosta: 62018CJ0311 -> "C-311/18". */
+export function caseNumber(celex) {
+  const m = celex.match(CASE_CELEX_RE);
+  if (!m) return celex;
+  return `${m[2][0] === "C" ? "C" : m[2][0]}-${+m[3]}/${m[1].slice(2)}`;
+}
+
+/**
+ * Tulkitsee tuomioviitteen: "C-311/18", "T-604/18", CELEX "62018CJ0311" tai ECLI.
+ * Palauttaa { candidates } tai { ecli } tai { error }.
+ */
+export function parseCaseRef(input) {
+  const raw = String(input ?? "").trim();
+  const up = raw.toUpperCase().replace(/\s+/g, "");
+  if (CASE_CELEX_RE.test(up)) return { candidates: [up] };
+  if (/^ECLI:EU:[CTF]:\d{4}:\d+$/i.test(up)) return { ecli: up };
+  const m = raw.match(CASE_NO_RE);
+  if (!m) return { error: `Tuomioviitettä "${raw}" ei tunnistettu. Anna asianumero (esim. "C-311/18"), CELEX-numero (62018CJ0311) tai ECLI-tunnus.` };
+  const court = m[1].toUpperCase();
+  const y = m[3].length === 2 ? (+m[3] >= 50 ? 1900 + +m[3] : 2000 + +m[3]) : +m[3];
+  const n = String(+m[2]).padStart(4, "0");
+  // Tuomio ensin, sitten määräys.
+  return { candidates: [`6${y}${court}J${n}`, `6${y}${court}O${n}`] };
+}
+
+export async function celexByEcli(ecli) {
+  const rows = await sparql(
+    `PREFIX cdm: <${CDM}> SELECT ?c WHERE { ?w cdm:case-law_ecli ${lit(ecli)} ; cdm:resource_legal_id_celex ?c . FILTER(REGEX(STR(?c), "^6[0-9]{4}[A-Z]{2}[0-9]{4}$")) } LIMIT 1`,
+    30 * DAY,
+  );
+  return rows[0]?.c ?? null;
+}
+
+/** Tulkittu kohta luettavaksi: "A46P2LC" -> "46 art. 2 kohta c alak.". */
+export function fmtLocation(loc) {
+  // Artiklan kirjainosa (10 a) ei voi olla P (kohta) eikä L (alakohta).
+  const m = String(loc).match(/^A0*(\d+)([A-KM-OQ-Z]?)(?:P0*(\d+))?((?:L(?:\d+|[A-Z]+))*)/);
+  if (!m) return loc;
+  let s = `${m[1]}${m[2] ? ` ${m[2].toLowerCase()}` : ""} art.`;
+  if (m[3]) s += ` ${m[3]} kohta`;
+  // L-osia voi olla useita (L1LB = 1. alakohdan b alakohta); näytetään kirjaimella merkitty.
+  const ls = [...(m[4] ?? "").matchAll(/L(\d+|[A-Z]+)/g)].map((x) => x[1]);
+  const letter = ls.reverse().find((x) => /^[A-Z]+$/.test(x));
+  if (letter) s += ` ${letter.toLowerCase()} alak.`;
+  else if (ls.length) s += ` ${ls[0]} alak.`;
+  return s;
+}
+
+const LOC_FILTER = `?a <${OWL}annotatedSource> ?j ; <${OWL}annotatedProperty> cdm:case-law_interpretes_resource_legal ; <${OWL}annotatedTarget> ?t ; ?ap ?loc . FILTER(STRENDS(STR(?ap), "reference_to_modified_location"))`;
+
+/** Tuomion perustiedot ja tulkitut säännökset. */
+export async function caseInfo(celex, lang) {
+  const L = LANGS[lang];
+  const [meta, interp] = await Promise.all([
+    sparql(`PREFIX cdm: <${CDM}>
+SELECT ?p ?o WHERE {
+  ?w cdm:resource_legal_id_celex ${lit(celex)} .
+  { ?w ?p ?o . FILTER(?p IN (cdm:work_date_document, cdm:case-law_ecli)) }
+  UNION
+  { ?e cdm:expression_belongs_to_work ?w ; cdm:expression_uses_language ?p ; cdm:expression_title ?o .
+    FILTER(?p IN (<${LANG_URI}${L.uri}>, <${LANG_URI}ENG>)) }
+}`),
+    sparql(`PREFIX cdm: <${CDM}>
+SELECT ?tc ?loc WHERE {
+  ?j cdm:resource_legal_id_celex ${lit(celex)} .
+  ?j cdm:case-law_interpretes_resource_legal ?t . ?t cdm:resource_legal_id_celex ?tc .
+  OPTIONAL { ${LOC_FILTER} }
+}`),
+  ]);
+  if (!meta.length) return null;
+  const title = meta.find((r) => r.p === LANG_URI + L.uri)?.o ?? meta.find((r) => r.p === LANG_URI + "ENG")?.o ?? "";
+  const acts = new Map();
+  for (const r of interp) {
+    if (!acts.has(r.tc)) acts.set(r.tc, new Set());
+    if (r.loc) acts.get(r.tc).add(r.loc);
+  }
+  return {
+    celex,
+    title,
+    date: meta.find((r) => r.p === CDM + "work_date_document")?.o ?? null,
+    ecli: meta.find((r) => r.p === CDM + "case-law_ecli")?.o ?? null,
+    interprets: [...acts].map(([c, locs]) => ({ celex: c, locations: [...locs].sort() })),
+  };
+}
+
+/**
+ * Tuomiot, jotka tulkitsevat säädöstä (valinnaisesti tiettyä artiklaa), uusimmasta.
+ * artikla: "6" tai "10a".
+ */
+export async function casesInterpreting({ actCelex, article, from, lang, page }) {
+  const L = LANGS[lang];
+  let artFilter = "";
+  if (article) {
+    const m = String(article).toUpperCase().replace(/\s+/g, "").match(/^(\d+)([A-Z]?)$/);
+    if (!m) return null;
+    artFilter = `FILTER(REGEX(STR(?loc), "^A0*${+m[1]}${m[2]}($|[A-Z])"))`;
+  }
+  const rows = await sparql(`PREFIX cdm: <${CDM}>
+SELECT ?jc ?date (SAMPLE(?ti) AS ?title) (SAMPLE(?ec) AS ?ecli) (GROUP_CONCAT(DISTINCT ?loc; separator=",") AS ?locs) WHERE {
+  ?t cdm:resource_legal_id_celex ${lit(actCelex)} .
+  ?j cdm:case-law_interpretes_resource_legal ?t ; cdm:resource_legal_id_celex ?jc ; cdm:work_date_document ?date .
+  FILTER(REGEX(STR(?jc), "^6[0-9]{4}(CJ|TJ)[0-9]{4}$"))
+  ${from ? `FILTER(?date >= "${+from}-01-01"^^<http://www.w3.org/2001/XMLSchema#date>)` : ""}
+  ${article ? `${LOC_FILTER} ${artFilter}` : `OPTIONAL { ${LOC_FILTER} }`}
+  OPTIONAL { ?j cdm:case-law_ecli ?ec }
+  OPTIONAL { ?e cdm:expression_belongs_to_work ?j ; cdm:expression_uses_language <${LANG_URI}${L.uri}> ; cdm:expression_title ?ti }
+} GROUP BY ?jc ?date ORDER BY DESC(?date) LIMIT 11 OFFSET ${(Math.max(1, page) - 1) * 10}`);
+  return rows.map((r) => ({ ...r, locations: r.locs ? r.locs.split(",").sort() : [] }));
+}
+
+/** Tuomiot otsikon sanoilla (otsikossa ovat asianosaiset ja asiasanat). */
+export async function searchCases({ words, from, to, lang, page }) {
+  const L = LANGS[lang];
+  const terms = String(words ?? "")
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((w) => w.length >= 2)
+    .slice(0, 6)
+    .map((w) => (w.length >= 4 ? `"${w}*"` : `"${w}"`));
+  if (!terms.length) return null;
+  const filters = [`REGEX(STR(?jc), "^6[0-9]{4}(CJ|TJ)[0-9]{4}$")`];
+  if (from) filters.push(`?date >= "${+from}-01-01"^^<http://www.w3.org/2001/XMLSchema#date>`);
+  if (to) filters.push(`?date <= "${+to}-12-31"^^<http://www.w3.org/2001/XMLSchema#date>`);
+  return sparql(
+    `PREFIX cdm: <${CDM}>
+SELECT ?jc ?date (SAMPLE(?ti) AS ?title) (SAMPLE(?ec) AS ?ecli) WHERE {
+  ?e cdm:expression_uses_language <${LANG_URI}${L.uri}> ; cdm:expression_title ?ti ; cdm:expression_belongs_to_work ?j .
+  ?ti bif:contains '${terms.join(" AND ").replace(/'/g, "")}' .
+  ?j cdm:resource_legal_id_celex ?jc ; cdm:work_date_document ?date .
+  OPTIONAL { ?j cdm:case-law_ecli ?ec }
+  FILTER(${filters.join(" && ")})
+} GROUP BY ?jc ?date ORDER BY DESC(?date) LIMIT 11 OFFSET ${(Math.max(1, page) - 1) * 10}`,
+    3600,
+  );
 }

@@ -1,6 +1,6 @@
 # eurlex-mcp
 
-Claude-liitin (MCP-palvelin), joka hakee EU-säädösten (asetukset, direktiivit, päätökset) sanatarkan tekstin ja tiedot EU:n julkaisutoimiston avoimesta tietokannasta (Cellar). Aineisto on sama kuin EUR-Lexissä. Toimii Cloudflare Workerina, ei tallenna mitään eikä tarvitse API-avaimia tai rekisteröitymistä.
+Claude-liitin (MCP-palvelin), joka hakee EU-säädösten (asetukset, direktiivit, päätökset) ja EU-tuomioistuimen ratkaisujen sanatarkan tekstin ja tiedot EU:n julkaisutoimiston avoimesta tietokannasta (Cellar). Aineisto on sama kuin EUR-Lexissä. Toimii Cloudflare Workerina, ei tallenna mitään eikä tarvitse API-avaimia tai rekisteröitymistä.
 
 ## Työkalut
 
@@ -10,6 +10,8 @@ Claude-liitin (MCP-palvelin), joka hakee EU-säädösten (asetukset, direktiivit
 | `eu_saados_tiedot` | Nimi, CELEX- ja ELI-tunnus, antopäivä, voimaantulo- ja soveltamispäivät, voimassaolo, konsolidoidut versiot (myös tulevat), muuttavat ja kumoavat säädökset, sisällysluettelo |
 | `hae_eu_artikla` | Artiklan, johdanto-osan perustelukappaleen tai liitteen sanatarkka teksti |
 | `etsi_eu_saadoksesta` | Sanahaku yhden säädöksen tekstistä, palauttaa osumat artikloittain |
+| `hae_eu_tuomioita` | Unionin tuomioistuimen ja unionin yleisen tuomioistuimen tuomiot ja määräykset, jotka tulkitsevat annettua säädöstä tai artiklaa, tai haku otsikon sanoilla |
+| `eu_tuomio` | Tuomion perustiedot, tulkitut säännökset ja tuomiolauselma; lisäksi numeroidut kohdat tai sanahaku tuomion tekstistä |
 
 Säädöksen voi antaa numerona (`2016/679`, `93/13/ETY`, `asetus (EY) N:o 1907/2006`), CELEX-numerona (`32016R0679`) tai ELI-osoitteena. Kieli: suomi (oletus), ruotsi tai englanti.
 
@@ -26,6 +28,14 @@ Säädöksen voi antaa numerona (`2016/679`, `93/13/ETY`, `asetus (EY) N:o 1907/
 - Metatiedot ja haku: SPARQL `https://publications.europa.eu/webapi/rdf/sparql` (CDM-ontologia)
 - Konsolidoidut versiot: `cdm:act_consolidated_based_on_resource_legal`
 - Välimuisti: asiakirjan hakemisto 30 vrk (tietty CELEX-versio ei muutu), metatiedot 6 h (Cloudflaren Cache API). Asiakirja jäsennetään kerran ja tallennetaan osina (perustiedot ja kappaleosat), jotta kutsu pysyy Workersin ilmaistason CPU-rajan alla.
+
+## Oikeuskäytäntö
+
+- Tuomion voi antaa asianumerona (`C-311/18`, `T-604/18`), CELEX-numerona (`62018CJ0311`) tai ECLI-tunnuksena (`ECLI:EU:C:2020:559`).
+- Tulkitut säännökset tulevat julkaisutoimiston luokittelusta (`cdm:case-law_interpretes_resource_legal` ja sen tarkennukset artiklaan, kohtaan ja alakohtaan). Luokittelu voi olla puutteellinen, etenkin uusimmissa ratkaisuissa.
+- `eu_tuomio` palauttaa oletuksena perustiedot, tulkitut säännökset ja tuomiolauselman sekä tuomion rakenteen (väliotsikot ja kohtien numerot). Kohdat haetaan `kohdat`-parametrilla (enintään 60 kerralla).
+- Rakenne tunnistetaan XHTML-luokista (`coj-count`, `coj-title-grseq-N`, vanhemmissa sama ilman `coj-`-etuliitettä). Vanhimmista HTML-tuomioista kohdat tunnistetaan tekstistä.
+- Julkisasiamiehen ratkaisuehdotukset eivät ole mukana.
 
 ## Rakenteen tunnistus
 
@@ -55,7 +65,7 @@ Cloudflare Workers Builds julkaisee automaattisesti pushista main-haaraan (`npx 
 
 - Haku kohdistuu säädösten nimiin, ei koko tekstiin. Yhden säädöksen sisällä toimii sanahaku.
 - Osa vanhemmista alkuperäisistä teksteistä on julkaisutoimiston aineistossa vain PDF:nä. Niistä liitin ohjaa konsolidoituun tekstiin tai EUR-Lexiin.
-- EU-tuomioistuimen ratkaisut eivät ole mukana.
+- Tuomioiden haku kohdistuu otsikoihin ja julkaisutoimiston luokitteluun, ei koko tekstiin.
 - Direktiivi velvoittaa jäsenvaltioita; yksityisiin sovelletaan yleensä kansallista täytäntöönpanolakia.
 
 ## Lisenssi ja lähde

@@ -11,6 +11,13 @@ import {
   fetchDocument,
   eurlexUrl,
   shortId,
+  parseCaseRef,
+  celexByEcli,
+  caseInfo,
+  casesInterpreting,
+  searchCases,
+  caseNumber,
+  fmtLocation,
   LANGS,
   TYPE_LETTER,
 } from "./cellar.js";
@@ -104,6 +111,38 @@ export const TOOLS = [
       required: ["saados", "hakusana"],
     },
   },
+  {
+    name: "hae_eu_tuomioita",
+    description:
+      "Hakee EU-tuomioistuimen ja unionin yleisen tuomioistuimen tuomioita: joko tuomiot, jotka tulkitsevat tiettyä säädöstä tai sen artiklaa (esim. tietosuoja-asetuksen 6 artikla), tai haku otsikon sanoilla (otsikossa ovat asianosaiset ja usein asiasanat). Palauttaa asianumerot, päivämäärät, ECLI-tunnukset ja tulkitut kohdat uusimmasta vanhimpaan.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        saados: { ...common.saados, description: "Säädös, jota tuomiot tulkitsevat (kuten muissa työkaluissa). Valinnainen, jos hakusana annetaan." },
+        tyyppi: common.tyyppi,
+        artikla: { type: "string", description: "Artikla, jota tuomiot tulkitsevat, esim. \"6\". Vaatii säädöksen." },
+        hakusana: { type: "string", description: "Sanat tuomion otsikosta, esim. asianosainen (\"Schrems\") tai aihe (\"henkilötietojen\")." },
+        alkaen_vuosi: { type: "integer", description: "Ensimmäinen vuosi (valinnainen)." },
+        kieli: common.kieli,
+        sivu: { type: "integer", description: "Tulossivu, 1 = ensimmäinen. Sivulla enintään 10 tulosta." },
+      },
+    },
+  },
+  {
+    name: "eu_tuomio",
+    description:
+      "Palauttaa EU-tuomioistuimen tuomion: asianosaiset, päivämäärä, ECLI, tulkitut säännökset ja tuomiolauselma (ratkaisu). Parametrilla kohdat tuomion perustelujen numeroidut kohdat (esim. \"94-105\"), parametrilla hakusana osumat kohtineen.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tuomio: { type: "string", description: "Asianumero (\"C-311/18\", \"T-604/18\"), CELEX-numero (\"62018CJ0311\") tai ECLI-tunnus." },
+        kohdat: { type: "string", description: "Numeroidut kohdat, esim. \"94-105\" tai \"134, 168-170\". Enintään 60 kohtaa kerralla. Valinnainen." },
+        hakusana: { type: "string", description: "Etsittävä merkkijono tuomion tekstistä. Valinnainen." },
+        kieli: common.kieli,
+      },
+      required: ["tuomio"],
+    },
+  },
 ];
 
 const TITLES = {
@@ -111,6 +150,8 @@ const TITLES = {
   eu_saados_tiedot: "EU-säädöksen tiedot",
   hae_eu_artikla: "Hae EU-säädöksen artikla",
   etsi_eu_saadoksesta: "Etsi EU-säädöksen tekstistä",
+  hae_eu_tuomioita: "Hae EU-tuomioita",
+  eu_tuomio: "EU-tuomio",
 };
 for (const t of TOOLS) {
   t.annotations = { title: TITLES[t.name] ?? t.name, readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
@@ -196,7 +237,8 @@ async function loadDoc(celex, lang) {
           `Kokeile konsolidoitua tekstiä (jätä versio pois), toista kieltä tai lue teksti EUR-Lexistä: ${eurlexUrl(celex, lang)}`,
       );
     }
-    const idx = buildDocIndex(text);
+    // Sektori 6 = oikeuskäytäntö: tunnistetaan numeroidut kohdat ja tuomiolauselma.
+    const idx = buildDocIndex(text, { judgment: celex.startsWith("6") });
     if (!idx) throw new UserError(`Säädöksen ${celex} tekstiä ei voitu tulkita.`);
     const shards = [[]];
     const starts = [0];
@@ -446,11 +488,171 @@ async function etsiEuSaadoksesta(args) {
   return clip(out.join("\n"));
 }
 
+// ---------- Oikeuskäytäntö ----------
+
+/** Otsikko osiin: "Tuomioistuin päivä.#Asianosaiset#Asiasanat#Asia C-…" */
+function caseTitleParts(title) {
+  // Otsikon osat erotetaan #-merkillä; Cellarin otsikoissa voi olla rivinvaihtoentiteetti &#xd;.
+  const parts = String(title ?? "")
+    .replace(/&#x?d;|&#13;/gi, " ")
+    .split("#")
+    .map((x) => x.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  return { head: parts[0] ?? "", rest: parts.slice(1).filter((x) => !/^Asia [CTF]-|^Mål [CTF]-|^Case [CTF]-/.test(x)) };
+}
+
+function locationsText(interprets) {
+  return interprets
+    .filter((x) => x.locations.length || /^3/.test(x.celex))
+    .map((x) => `${shortId(x.celex)}${x.locations.length ? `: ${[...new Set(x.locations.map(fmtLocation))].join("; ")}` : ""}`);
+}
+
+async function haeEuTuomioita(args) {
+  const lang = asLang(args.kieli);
+  const page = Math.max(1, Number(args.sivu) || 1);
+  let rows;
+  let heading;
+  if (args.saados) {
+    const act = await loadAct(args);
+    rows = await casesInterpreting({ actCelex: act.celex, article: args.artikla, from: args.alkaen_vuosi, lang, page });
+    if (rows === null) throw new UserError("Anna artikla numerona, esim. \"6\" tai \"10 a\".");
+    heading = `Tuomiot, jotka tulkitsevat säädöstä ${shortId(act.celex)}${args.artikla ? `, ${args.artikla} artikla` : ""}`;
+  } else if (args.hakusana) {
+    rows = await searchCases({ words: args.hakusana, from: args.alkaen_vuosi, lang, page });
+    if (rows === null) throw new UserError("Anna hakusana.");
+    heading = `Tuomiot hakusanalla "${args.hakusana}"`;
+  } else {
+    throw new UserError("Anna säädös (ja halutessasi artikla) tai hakusana.");
+  }
+  if (!rows.length) {
+    return page > 1
+      ? "Ei enempää tuloksia."
+      : args.saados
+        ? "Tuomioita ei löytynyt. Tulkintatiedot ovat julkaisutoimiston luokittelua; kokeile ilman artiklaa tai hakusanalla."
+        : "Ei osumia. Kokeile sanan vartaloa tai asianosaisen nimeä.";
+  }
+  const lines = rows.slice(0, 10).map((r) => {
+    const t = caseTitleParts(r.title);
+    const locs = r.locations?.length ? `\n  Tulkitut kohdat: ${[...new Set(r.locations.map(fmtLocation))].join("; ")}` : "";
+    return `${caseNumber(r.jc)} (${fmtDate(r.date)}${r.ecli ? `, ${r.ecli}` : ""}) ${t.head}\n  ${t.rest.join(" ").slice(0, 300)}${locs}`;
+  });
+  let out = `${heading} (sivu ${page}, uusimmasta vanhimpaan):\n\n${lines.join("\n\n")}`;
+  if (rows.length > 10) out += `\n\nLisää tuloksia: hae sivu ${page + 1}.`;
+  out += "\n\nHae tuomio eu_tuomio-työkalulla (asianumero).";
+  return out;
+}
+
+async function resolveCase(args) {
+  const r = parseCaseRef(args.tuomio);
+  if (r.error) throw new UserError(r.error);
+  if (r.ecli) {
+    const c = await celexByEcli(r.ecli);
+    if (!c) throw new UserError(`Tuomiota ${r.ecli} ei löytynyt.`);
+    return c;
+  }
+  const found = await existing(r.candidates);
+  if (!found.length) throw new UserError(`Tuomiota tai määräystä ${args.tuomio} ei löytynyt. Tarkista asianumero, tai etsi hae_eu_tuomioita-työkalulla.`);
+  return found[0];
+}
+
+/** "94-105, 134" -> [94..105, 134]. */
+function parseRanges(s) {
+  const out = [];
+  for (const part of String(s).split(/[,;\s]+/).filter(Boolean)) {
+    const m = part.match(/^(\d+)(?:[-–](\d+))?$/);
+    if (!m) throw new UserError("Anna kohdat muodossa \"94-105\" tai \"134, 168-170\".");
+    const a = +m[1];
+    const b = m[2] ? +m[2] : a;
+    for (let n = Math.min(a, b); n <= Math.max(a, b); n++) out.push(n);
+  }
+  return [...new Set(out)].sort((x, y) => x - y);
+}
+
+async function euTuomio(args) {
+  const lang = asLang(args.kieli);
+  const celex = await resolveCase(args);
+  const [info, doc] = await Promise.all([caseInfo(celex, lang), loadDoc(celex, lang)]);
+  if (!info) throw new UserError(`Tuomion ${celex} tietoja ei löytynyt.`);
+  const b = doc.base;
+  const j = b.judgment;
+  const t = caseTitleParts(info.title);
+  const out = [`${t.head}${t.rest.length ? ` ${t.rest.join(" ")}` : ""}`.slice(0, 600)];
+  out.push(`Asia ${caseNumber(celex)}, CELEX ${celex}${info.ecli ? `, ${info.ecli}` : ""}${info.date ? `, annettu ${fmtDate(info.date)}` : ""}.`);
+  const locs = locationsText(info.interprets);
+  if (locs.length) out.push(`Tulkitut säännökset (julkaisutoimiston luokittelu): ${locs.join(" | ")}`);
+  out.push(`Lähde: ${eurlexUrl(celex, lang)}`, "");
+  if (!j || !j.jp.length) {
+    // Määräykset ja vanhat tuomiot voivat olla rakenteeltaan erilaisia: koko teksti.
+    const all = await doc.paras([[0, b.nParas]]);
+    out.push(all.join("\n"));
+    return clip(out.join("\n"));
+  }
+  const N = j.jp.length;
+  const paraRange = (n) => [j.jp[n - 1], n < N ? j.jp[n] : j.op ? j.op[0] : b.nParas];
+
+  if (args.kohdat) {
+    const nums = parseRanges(args.kohdat).filter((n) => n >= 1 && n <= N);
+    if (!nums.length) throw new UserError(`Tuomiossa on kohdat 1–${N}.`);
+    if (nums.length > 60) throw new UserError("Enintään 60 kohtaa kerralla.");
+    const ranges = nums.map(paraRange);
+    const texts = await doc.paras(ranges);
+    // Kohtien väliin osuvat väliotsikot näkyvät tekstissä sellaisinaan.
+    out.push(`Kohdat ${args.kohdat}:`, "", texts.join("\n"));
+    return clip(out.join("\n"));
+  }
+
+  if (args.hakusana) {
+    const q = String(args.hakusana).trim();
+    if (q.length < 3) throw new UserError("Hakusanan pitää olla vähintään 3 merkkiä.");
+    const all = await doc.paras([[0, b.nParas]]);
+    const numAt = new Array(b.nParas).fill(0);
+    for (let n = 1; n <= N; n++) {
+      const [s, e] = paraRange(n);
+      for (let i = s; i < e; i++) numAt[i] = n;
+    }
+    const ql = q.toLowerCase();
+    const hits = [];
+    for (let i = 0; i < all.length && hits.length < 30; i++) {
+      const k = all[i].toLowerCase().indexOf(ql);
+      if (k === -1) continue;
+      const start = Math.max(0, k - 120);
+      const where = numAt[i] ? `kohta ${numAt[i]}` : j.op && i >= j.op[0] && i < j.op[1] ? "tuomiolauselma" : "muu teksti";
+      hits.push(`${where}: ${start > 0 ? "…" : ""}${all[i].slice(start, k + q.length + 160)}…`);
+    }
+    out.push(hits.length ? `Osumat hakusanalle "${q}" (${hits.length}${hits.length >= 30 ? "+" : ""}):\n\n${hits.join("\n\n")}` : `Hakusanaa "${q}" ei löytynyt.`);
+    return clip(out.join("\n"));
+  }
+
+  if (j.op) {
+    const op = await doc.paras([j.op]);
+    out.push("Tuomiolauselma:", op.join("\n"));
+  } else {
+    out.push("(Tuomiolauselmaa ei tunnistettu tekstistä.)");
+  }
+  // Väliotsikot ja kohta, josta kukin alkaa.
+  const firstNumAfter = (i) => {
+    const k = j.jp.findIndex((x) => x > i);
+    return k === -1 ? null : k + 1;
+  };
+  const heads = j.headings
+    .filter(([i]) => i > (j.jp[0] ?? 0) - 1)
+    .map(([i, h]) => {
+      const n = firstNumAfter(i);
+      return n ? `- ${h} (kohdasta ${n})` : null;
+    })
+    .filter(Boolean);
+  out.push("", `Tuomiossa on ${N} numeroitua kohtaa. Hae kohtia kohdat-parametrilla (esim. "1-10") tai etsi hakusana-parametrilla.`);
+  if (heads.length) out.push("Rakenne:", ...heads.slice(0, 60));
+  return clip(out.join("\n"));
+}
+
 const HANDLERS = {
   hae_eu_saadoksia: haeEuSaadoksia,
   eu_saados_tiedot: euSaadosTiedot,
   hae_eu_artikla: haeEuArtikla,
   etsi_eu_saadoksesta: etsiEuSaadoksesta,
+  hae_eu_tuomioita: haeEuTuomioita,
+  eu_tuomio: euTuomio,
 };
 
 export async function callTool(name, args = {}) {
