@@ -160,6 +160,16 @@ function artNumber(t) {
   return m ? (m[1] ?? m[2] ?? m[3]).replace(/\s+/g, "") : null;
 }
 
+// Komission ehdotukset (COM): artiklan numero ja nimi samassa kappaleessa ("1 artikla Kohde"),
+// johdanto-osan perustelukappaleet luokalla ManualConsidrant ("(1) …").
+const PROP_ART_CLASS = /(^|\s)Titrearticle(\s|$)/;
+const PROP_ART_TEXT = /^(?:(\d+\s*[a-z]?)\s+artikla|artikel\s+(\d+\s*[a-z]?)|article\s+(\d+\s*[a-z]?))\b\s*(.*)$/i;
+const PROP_RECITAL_CLASS = /(^|\s)ManualConsidrant(\s|$)/;
+const PROP_ANNEX_CLASS = /(^|\s)Annexetitre(\s|$)/;
+const PROP_ANNEX_TEXT = /^(?:LIITE|BILAGA|ANNEX)\s+([IVXLC]+[A-Z]?|\d+[a-z]?)\b\s*(.*)$/;
+// Ehdotusten luettelokappaleissa numero ja teksti ovat eri span-elementeissä ilman väliä ("1.Seuraavat").
+const PROP_LIST_CLASS = /(^|\s)li(\s|$)/;
+
 /**
  * Muodostaa hakemiston asiakirjan merkkijonosta.
  * Palauttaa { base, paras } tai null, jos asiakirjassa ei ole tekstiä.
@@ -179,6 +189,7 @@ export function buildDocIndex(text, { judgment = false } = {}) {
     format = "html";
   }
   if (!paras.length) return null;
+  for (const p of paras) if (PROP_LIST_CLASS.test(p.c)) p.t = p.t.replace(/^(\(?[0-9]{1,3}[a-z]?[.)]|\(?[a-z]{1,4}\))(?=\S)/, "$1 ");
 
   const base = { v: DOC_INDEX_VERSION, format, nParas: paras.length, articles: [], recitals: [], annexes: [], toc: "" };
 
@@ -213,6 +224,32 @@ export function buildDocIndex(text, { judgment = false } = {}) {
       open = null;
     };
     paras.forEach((p, i) => {
+      if (PROP_RECITAL_CLASS.test(p.c)) {
+        const r = p.t.match(/^\((\d+)\)/);
+        if (r && !base.recitals.some((x) => x.n === r[1])) {
+          base.recitals.push({ z: `rct_${r[1]}`, n: r[1], parts: [[i, i + 1]] });
+          return;
+        }
+      }
+      if (PROP_ANNEX_CLASS.test(p.c)) {
+        const am = p.t.match(PROP_ANNEX_TEXT);
+        if (am) {
+          close(i);
+          open = { z: `anx_${am[1]}`, n: am[1], parts: [[i, i + 1]], title0: am[2].trim() };
+          base.annexes.push(open);
+          return;
+        }
+      }
+      if (PROP_ART_CLASS.test(p.c)) {
+        const pm = p.t.match(PROP_ART_TEXT);
+        if (pm) {
+          close(i);
+          const n0 = (pm[1] ?? pm[2] ?? pm[3]).replace(/\s+/g, "");
+          open = { z: `art_${n0}`, n: n0, parts: [[i, i + 1]], title0: pm[4].trim() };
+          base.articles.push(open);
+          return;
+        }
+      }
       const n = format === "html" || ART_CLASS.test(p.c) ? artNumber(p.t) : null;
       if (n) {
         close(i);
@@ -239,11 +276,23 @@ export function buildDocIndex(text, { judgment = false } = {}) {
     const [s, e] = a.parts[0];
     let i = s;
     while (i < e - 1 && isMark(paras[i].t)) i++;
+    if (a.title0 !== undefined) {
+      a.h = paras[i].t.slice(0, paras[i].t.length - a.title0.length).trim();
+      a.title = a.title0;
+      delete a.title0;
+      continue;
+    }
     a.h = paras[i].t;
     a.title = i + 1 < e && SUBTITLE_CLASS.test(paras[i + 1].c) ? paras[i + 1].t : "";
   }
   for (const x of base.annexes) {
     const [s, e] = x.parts[0];
+    if (x.title0 !== undefined) {
+      x.h = paras[s].t.slice(0, paras[s].t.length - x.title0.length).trim();
+      x.title = x.title0.slice(0, 200);
+      delete x.title0;
+      continue;
+    }
     let h = s;
     while (h < e - 1 && isMark(paras[h].t)) h++;
     x.h = paras[h].t;

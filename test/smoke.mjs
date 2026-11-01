@@ -30,7 +30,7 @@ function check(cond, label) {
 const init = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } });
 check(init.result?.serverInfo?.name === "eurlex", "initialize");
 const list = await rpc("tools/list", {});
-check(list.result?.tools?.length === 8, "tools/list (8 työkalua)");
+check(list.result?.tools?.length === 10, "tools/list (10 työkalua)");
 
 const show = process.argv.includes("-v");
 const cases = [
@@ -49,6 +49,10 @@ const cases = [
   ["eu_tuomio", { tuomio: "C-311/18" }, (t) => t.includes("Tuomiolauselma") && t.includes("ECLI:EU:C:2020:559")],
   ["eu_tuomio", { tuomio: "ECLI:EU:C:2020:559", kohdat: "134" }, (t) => t.includes("\n134 Tältä osin")],
   ["eu_tuomio", { tuomio: "C-1/99" }, (t) => t.includes("Tuomiolauselma") && t.includes("Yhteisöjen")],
+  ["eu_ehdotus", { ehdotus: "COM(2021) 206" }, (t) => t.includes("2021/0106(COD)") && t.includes("asetus 2024/1689") && t.includes("Vaiheet")],
+  ["hae_eu_ehdotuksia", { hakusana: "lääkinnällis", tila: "vireilla" }, (t) => t.includes("COM(2025) 1023") && t.includes("vireillä")],
+  ["hae_eu_artikla", { saados: "COM(2021) 206", artikla: "5" }, (t) => t.includes("KOMISSION EHDOTUS") && t.includes("1. Seuraavat tekoälyyn")],
+  ["hae_eu_artikla", { saados: "COM(2021) 206", liite: "III" }, (t) => t.includes("LIITE III") && t.includes("SUURIRISKISET")],
   ["tuotevaroitukset", { kategoria: "kosmetiikka", viikkoja: 4 }, (t) => /\nSR\/\d+\/\d+ · /.test(t) && t.includes("Kosmetiikka") && t.includes("CC0")],
   ["tuotevaroitukset", { hakusana: "zzqxw-ei-ole", viikkoja: 1 }, (t) => t.includes("ei osumia")],
   ["eu_laiterekisteri", { valmistaja: "planmeca" }, (t) => t.includes("FI-MF-000006499") && t.includes("valmistaja")],

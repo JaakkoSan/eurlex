@@ -12,10 +12,12 @@ Claude-liitin (MCP-palvelin), joka hakee EU-säädösten (asetukset, direktiivit
 | `etsi_eu_saadoksesta` | Sanahaku yhden säädöksen tekstistä, palauttaa osumat artikloittain |
 | `hae_eu_tuomioita` | Unionin tuomioistuimen ja unionin yleisen tuomioistuimen tuomiot ja määräykset, jotka tulkitsevat annettua säädöstä tai artiklaa, tai haku otsikon sanoilla |
 | `eu_tuomio` | Tuomion perustiedot, tulkitut säännökset ja tuomiolauselma; lisäksi numeroidut kohdat tai sanahaku tuomion tekstistä |
+| `hae_eu_ehdotuksia` | Komission säädösehdotusten (COM) haku nimen sanoilla, vuosilla ja tilalla (vireillä, hyväksytty); menettelytunnus ja hyväksytty säädös |
+| `eu_ehdotus` | Ehdotuksen tiedot: menettely ja sen tyyppi, tila, valmistellut pääosasto, hyväksytty säädös, muutettavat säädökset ja käsittelyn vaiheet |
 | `tuotevaroitukset` | EU Safety Gate -hälytykset vaarallisista kulutustuotteista suomeksi: haku sanalla tai viivakoodilla, tuoteluokalla ja ilmoittajamaalla viimeisimmistä viikkoraporteista |
 | `eu_laiterekisteri` | EUDAMED: lääkinnällisen laitteen tiedot UDI-DI- tai Basic UDI-DI -tunnuksella, toimijan tiedot ja laitteet SRN-tunnuksella, toimijahaku nimellä ja maalla |
 
-Säädöksen voi antaa numerona (`2016/679`, `93/13/ETY`, `asetus (EY) N:o 1907/2006`), CELEX-numerona (`32016R0679`) tai ELI-osoitteena. Kieli: suomi (oletus), ruotsi tai englanti.
+Säädöksen voi antaa numerona (`2016/679`, `93/13/ETY`, `asetus (EY) N:o 1907/2006`), CELEX-numerona (`32016R0679`) tai ELI-osoitteena. Komission ehdotuksen voi antaa COM-tunnuksena (`COM(2021) 206`), jolloin `hae_eu_artikla` ja `etsi_eu_saadoksesta` palauttavat ehdotuksen tekstiä. Kieli: suomi (oletus), ruotsi tai englanti.
 
 ## Versiot
 
@@ -30,6 +32,13 @@ Säädöksen voi antaa numerona (`2016/679`, `93/13/ETY`, `asetus (EY) N:o 1907/
 - Metatiedot ja haku: SPARQL `https://publications.europa.eu/webapi/rdf/sparql` (CDM-ontologia)
 - Konsolidoidut versiot: `cdm:act_consolidated_based_on_resource_legal`
 - Välimuisti: asiakirjan hakemisto 30 vrk (tietty CELEX-versio ei muutu), metatiedot 6 h (Cloudflaren Cache API). Asiakirja jäsennetään kerran ja tallennetaan osina (perustiedot ja kappaleosat), jotta kutsu pysyy Workersin ilmaistason CPU-rajan alla.
+
+## Komission säädösehdotukset
+
+- Ehdotukset ovat CELEX-sektorissa 5 tyypillä PC (esim. `52021PC0206` = COM(2021) 206); muut COM-asiakirjat tyypillä DC.
+- Menettely on Cellarissa omana resurssinaan (`cdm:work_part_of_dossier`): menettelytunnus `procedure_code_interinstitutional_reference_procedure`, tila `procedure_code_interinstitutional_has_status_file-status` (PROP_PENDING, PROP_ADOPTED), hyväksytty säädös `dossier_produces_resource_legal` ja vaiheet `event_legal_part_of_dossier`. Vaiheiden ja koodien nimet haetaan suomeksi julkaisutoimiston koodistoista (`skos:prefLabel`). Vanhoilla ehdotuksilla menettelytietoja ei aina ole.
+- Ehdotuksen kieliversio koostuu usein useasta tiedostosta (säädösosa ja liitteet). Cellar vastaa silloin 300 Multiple Choices, ja tiedostot haetaan järjestyksessä ja yhdistetään. Ehdotusten artiklat (`Titrearticle`), perustelukappaleet (`ManualConsidrant`) ja liitteet (`Annexetitre`) tunnistetaan komission asiakirjamallin luokista.
+- Menettelyn sivu EUR-Lexissä: `https://eur-lex.europa.eu/procedure/FI/{vuosi}_{numero}`.
 
 ## Tuoterekisterit
 

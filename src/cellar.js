@@ -43,6 +43,14 @@ const plausibleYear = (s) => s.length === 4 && +s >= 1952 && +s <= 2100;
  * Esimerkit: "2016/679" + tyyppi, "asetus (EU) 2016/679", "direktiivi 93/13/ETY",
  * "asetus (EY) N:o 1907/2006", "32016R0679", "http://data.europa.eu/eli/reg/2016/679/oj".
  */
+/** "COM(2021) 206", "COM(2021)206 final", "COM/2021/206" -> [säädösehdotus, muu COM-asiakirja]. */
+export function parseComRef(input) {
+  const m = String(input ?? "").match(/^\s*COM\s*[(/]?\s*(\d{4})\s*[)/]?\s*(\d{1,4})\b/i);
+  if (!m) return null;
+  const n = String(+m[2]).padStart(4, "0");
+  return [`5${m[1]}PC${n}`, `5${m[1]}DC${n}`];
+}
+
 export function parseActRef(input, tyyppi) {
   const raw = String(input ?? "").trim();
   if (!raw) return { error: "Anna säädös, esim. \"2016/679\" tai CELEX \"32016R0679\"." };
@@ -50,6 +58,8 @@ export function parseActRef(input, tyyppi) {
   const cons = up.match(CONS_RE);
   if (cons) return { candidates: [`3${cons[1]}${cons[2]}${cons[3]}`] };
   if (CELEX_RE.test(up)) return { candidates: [up] };
+  const com = parseComRef(raw);
+  if (com) return { candidates: com };
   const eli = raw.match(/eli\/(reg|dir|dec)(?:_impl|_del)?\/(\d{4})\/(\d+)/i);
   if (eli) {
     const t = { reg: "R", dir: "L", dec: "D" }[eli[1].toLowerCase()];
@@ -222,9 +232,36 @@ SELECT DISTINCT ?celex ?title ?date ?force WHERE {
  */
 export async function fetchDocument(celex, lang, ttl) {
   const headers = { "Accept-Language": LANGS[lang].code };
-  const xhtml = await fetchText(RESOURCE + encodeURIComponent(celex), { ttl, headers: { ...headers, Accept: "application/xhtml+xml" } });
-  if (xhtml !== null) return xhtml;
-  return fetchText(RESOURCE + encodeURIComponent(celex), { ttl, headers: { ...headers, Accept: "text/html" } });
+  const xhtml = await fetchText(RESOURCE + encodeURIComponent(celex), { ttl, allow300: true, headers: { ...headers, Accept: "application/xhtml+xml" } });
+  if (xhtml !== null) return isMultiple(xhtml) ? joinItems(xhtml, ttl) : xhtml;
+  const html = await fetchText(RESOURCE + encodeURIComponent(celex), { ttl, allow300: true, headers: { ...headers, Accept: "text/html" } });
+  return html !== null && isMultiple(html) ? joinItems(html, ttl) : html;
+}
+
+const isMultiple = (t) => /<title>300 Multiple-Choice Response<\/title>/.test(t.slice(0, 300));
+
+/**
+ * Useasta tiedostosta koostuva kieliversio (komission ehdotus: säädösosa ja liitteet erikseen).
+ * Tiedostot haetaan järjestyksessä (stream_order) ja niiden body-osat yhdistetään yhdeksi XHTML-asiakirjaksi.
+ */
+async function joinItems(listing, ttl) {
+  const items = [];
+  for (const m of listing.matchAll(/<li title="item"><a href="(http:\/\/publications\.europa\.eu\/resource\/cellar\/[^"]+)"[\s\S]*?<li title="stream_order"[^>]*>(\d+)<\/li>/g)) {
+    items.push({ url: m[1].replace(/^http:/, "https:"), order: +m[2] });
+  }
+  if (!items.length) return null;
+  items.sort((a, b) => a.order - b.order);
+  const docs = [];
+  for (const it of items.slice(0, 8)) {
+    const t = await fetchText(it.url, { ttl });
+    if (t) docs.push(t);
+  }
+  if (!docs.length) return null;
+  const bodyOf = (t) => t.match(/<body[^>]*>([\s\S]*)<\/body>/i)?.[1] ?? "";
+  const first = docs[0];
+  const open = first.match(/^[\s\S]*?<body[^>]*>/i)?.[0];
+  if (!open) return first;
+  return `${open}${docs.map(bodyOf).join("\n")}</body></html>`;
 }
 
 export function eurlexUrl(celex, lang) {
@@ -239,6 +276,9 @@ export function shortId(celex) {
     const name = { P: "EU:n perusoikeuskirja", E: "SEUT (sopimus Euroopan unionin toiminnasta)", M: "SEU (sopimus Euroopan unionista)" }[t[2]];
     return t[3] ? `${name}, ${+t[3]} art.` : name;
   }
+  // Komission asiakirjat (sektori 5): PC = säädösehdotus, DC = muu COM-asiakirja.
+  const com = celex.match(/^5(\d{4})(PC|DC)(\d{4})/);
+  if (com) return `COM(${com[1]}) ${+com[3]}`;
   const m = celex.match(/^3(\d{4})([RLD])(\d{4})$/);
   if (!m) return `CELEX ${celex}`;
   // Ennen vuotta 1999 vuosi kirjoitettiin kahdella numerolla (93/13/ETY, N:o 2913/92).
@@ -387,4 +427,122 @@ SELECT ?jc ?date (SAMPLE(?ti) AS ?title) (SAMPLE(?ec) AS ?ecli) WHERE {
 } GROUP BY ?jc ?date ORDER BY DESC(?date) LIMIT 11 OFFSET ${(Math.max(1, page) - 1) * 10}`,
     3600,
   );
+}
+
+// ---------- Komission säädösehdotukset (CELEX-sektori 5, tyyppi PC) ----------
+
+const AUTH = "http://publications.europa.eu/resource/authority/";
+const SKOS = "http://www.w3.org/2004/02/skos/core#";
+const PROPOSAL_RE = "^5[0-9]{4}PC[0-9]{4}";
+
+/**
+ * Ehdotuksen menettely (dossier): menettelytunnus, tyyppi, tila, hyväksytty säädös,
+ * muutettavat säädökset ja vaiheet. Nimet ja koodien selitteet valitulla kielellä.
+ */
+export async function proposalInfo(celex, lang) {
+  const L = LANGS[lang];
+  const lc = lang === "sv" ? "sv" : lang === "en" ? "en" : "fi";
+  const head = await sparql(`PREFIX cdm: <${CDM}> PREFIX skos: <${SKOS}>
+SELECT ?date ?title ?titleEn ?dg ?dgLabel ?d ?proc ?ptype ?ptypeLabel ?status ?statusLabel ?adopted ?adoptedDate ?withdrawn WHERE {
+  ?w cdm:resource_legal_id_celex ${lit(celex)} ; cdm:work_date_document ?date .
+  OPTIONAL { ?e cdm:expression_belongs_to_work ?w ; cdm:expression_uses_language <${LANG_URI}${L.uri}> ; cdm:expression_title ?title }
+  OPTIONAL { ?e2 cdm:expression_belongs_to_work ?w ; cdm:expression_uses_language <${LANG_URI}ENG> ; cdm:expression_title ?titleEn }
+  OPTIONAL { ?w cdm:work_created_by_agent ?dg . FILTER(?dg != <${AUTH}corporate-body/COM>) OPTIONAL { ?dg skos:prefLabel ?dgLabel . FILTER(LANG(?dgLabel) = "${lc}") } }
+  OPTIONAL {
+    ?w cdm:work_part_of_dossier ?d .
+    OPTIONAL { ?d cdm:procedure_code_interinstitutional_reference_procedure ?proc }
+    OPTIONAL { ?d cdm:procedure_code_interinstitutional_has_type_concept_type_procedure_code_interinstitutional ?ptype . OPTIONAL { ?ptype skos:prefLabel ?ptypeLabel . FILTER(LANG(?ptypeLabel) = "${lc}") } }
+    OPTIONAL { ?d cdm:procedure_code_interinstitutional_has_status_file-status ?status . OPTIONAL { ?status skos:prefLabel ?statusLabel . FILTER(LANG(?statusLabel) = "${lc}") } }
+    OPTIONAL { ?d cdm:dossier_produces_resource_legal ?a . ?a cdm:resource_legal_id_celex ?adopted . FILTER(REGEX(STR(?adopted), "^3")) }
+    OPTIONAL { ?d cdm:dossier_date_adopted ?adoptedDate }
+    OPTIONAL { ?d cdm:dossier_withdrawn-proposal ?withdrawn }
+  }
+} LIMIT 20`, 6 * 3600);
+  if (!head.length) return null;
+  const h = head[0];
+  const pick = (k) => head.find((r) => r[k] !== undefined)?.[k] ?? null;
+  const info = {
+    celex,
+    date: h.date ?? null,
+    title: pick("title") ?? pick("titleEn") ?? "",
+    titleLang: pick("title") ? lang : "en",
+    dg: pick("dgLabel") ?? (pick("dg") ? pick("dg").split("/").pop() : null),
+    procedure: pick("proc") ? pick("proc").replace(/^(\d{4})\/(\d+)\/([A-Z]+)$/, "$1/$2($3)") : null,
+    procedureType: pick("ptypeLabel"),
+    status: pick("status")?.split("/").pop() ?? null,
+    statusLabel: pick("statusLabel"),
+    adopted: [...new Set(head.map((r) => r.adopted).filter(Boolean))],
+    adoptedDate: pick("adoptedDate"),
+    withdrawn: pick("withdrawn") === "1" || pick("withdrawn") === "true",
+    dossier: pick("d"),
+  };
+  const [events, amends] = await Promise.all([
+    info.dossier
+      ? sparql(`PREFIX cdm: <${CDM}> PREFIX skos: <${SKOS}>
+SELECT DISTINCT ?t ?label ?date ?inst WHERE {
+  ?e cdm:event_legal_part_of_dossier <${info.dossier}> ; cdm:event_legal_has_type_concept_type_event_legal ?t ; cdm:event_legal_date ?date .
+  OPTIONAL { ?t skos:prefLabel ?label . FILTER(LANG(?label) = "${lc}") }
+  OPTIONAL { ?e cdm:event_legal_initiated_by_institution ?inst }
+} ORDER BY ?date LIMIT 200`, 6 * 3600)
+      : Promise.resolve([]),
+    sparql(`PREFIX cdm: <${CDM}>
+SELECT DISTINCT ?c WHERE { ?w cdm:resource_legal_id_celex ${lit(celex)} ; cdm:resource_legal_proposes_to_amend_resource_legal ?m . ?m cdm:resource_legal_id_celex ?c . FILTER(REGEX(STR(?c), "^3[0-9]{4}[RLD][0-9]{4}$")) } LIMIT 60`, 6 * 3600),
+  ]);
+  info.events = events.map((r) => ({ code: r.t.split("/").pop(), label: r.label ?? null, date: r.date, inst: r.inst ? r.inst.split("/").pop() : null }));
+  info.amends = amends.map((r) => r.c).sort();
+  return info;
+}
+
+/** Säädösehdotusten haku nimen sanoilla ja vuosilla, uusin ensin. tila: "vireilla" | "hyvaksytty" | undefined. */
+export async function searchProposals({ words, from, to, tila, lang, page }) {
+  const L = LANGS[lang];
+  const terms = String(words ?? "")
+    .split(/[^\p{L}\p{N}-]+/u)
+    .map((w) => w.replace(/-/g, " ").trim())
+    .filter((w) => w.length >= 2)
+    .slice(0, 6)
+    .map((w) => (w.length >= 4 && !w.includes(" ") ? `"${w}*"` : `"${w}"`));
+  const filters = [`REGEX(STR(?celex), "${PROPOSAL_RE}")`];
+  if (from) filters.push(`?date >= "${+from}-01-01"^^<http://www.w3.org/2001/XMLSchema#date>`);
+  if (to) filters.push(`?date <= "${+to}-12-31"^^<http://www.w3.org/2001/XMLSchema#date>`);
+  const status =
+    tila === "vireilla" ? `?w cdm:work_part_of_dossier ?d . ?d cdm:procedure_code_interinstitutional_has_status_file-status <${AUTH}file-status/PROP_PENDING> .`
+    : tila === "hyvaksytty" ? `?w cdm:work_part_of_dossier ?d . ?d cdm:procedure_code_interinstitutional_has_status_file-status <${AUTH}file-status/PROP_ADOPTED> .`
+    : "";
+  const rows = await sparql(
+    `PREFIX cdm: <${CDM}>
+SELECT ?celex (SAMPLE(?t) AS ?title) (MAX(?dt) AS ?date) WHERE {
+  ?e cdm:expression_uses_language <${LANG_URI}${L.uri}> ; cdm:expression_title ?t ; cdm:expression_belongs_to_work ?w .
+  ${terms.length ? `?t bif:contains '${terms.join(" AND ").replace(/'/g, "")}' .` : ""}
+  ?w cdm:resource_legal_id_celex ?celex ; cdm:work_date_document ?dt .
+  BIND(?dt AS ?date0)
+  FILTER(${filters.join(" && ").replace(/\?date/g, "?dt")})
+  ${status}
+} GROUP BY ?celex ORDER BY DESC(?date) ?celex LIMIT 11 OFFSET ${(Math.max(1, page) - 1) * 10}`,
+    3600,
+  );
+  if (!rows.length) return [];
+  const extra = await sparql(
+    `PREFIX cdm: <${CDM}>
+SELECT DISTINCT ?celex ?proc ?st ?adopted WHERE {
+  VALUES ?celex { ${rows.slice(0, 10).map((r) => lit(r.celex)).join(" ")} }
+  ?w cdm:resource_legal_id_celex ?celex ; cdm:work_part_of_dossier ?d .
+  OPTIONAL { ?d cdm:procedure_code_interinstitutional_reference_procedure ?proc }
+  OPTIONAL { ?d cdm:procedure_code_interinstitutional_has_status_file-status ?st }
+  OPTIONAL { ?d cdm:dossier_produces_resource_legal ?a . ?a cdm:resource_legal_id_celex ?adopted . FILTER(REGEX(STR(?adopted), "^3")) }
+}`,
+    3600,
+  );
+  return rows.map((r) => {
+    const x = extra.filter((e) => e.celex === r.celex);
+    const uniq = (k, f = (v) => v) => [...new Set(x.map((e) => e[k]).filter(Boolean).map(f))];
+    return {
+      celex: r.celex,
+      title: r.title,
+      date: r.date,
+      procs: uniq("proc", (v) => v.replace(/^(\d{4})\/(\d+)\/([A-Z]+)$/, "$1/$2($3)")),
+      status: uniq("st", (v) => v.split("/").pop()),
+      adopted: uniq("adopted"),
+    };
+  });
 }

@@ -20,6 +20,9 @@ import {
   fmtLocation,
   LANGS,
   TYPE_LETTER,
+  parseComRef,
+  proposalInfo,
+  searchProposals,
 } from "./cellar.js";
 import { buildDocIndex, DOC_INDEX_VERSION } from "./doc.js";
 import { getDerived, putDerived, SourceError } from "./http.js";
@@ -188,6 +191,36 @@ export const TOOLS = [
       },
     },
   },
+  {
+    name: "hae_eu_ehdotuksia",
+    description:
+      "Hakee Euroopan komission säädösehdotuksia (COM-asiakirjat: ehdotukset asetuksiksi, direktiiveiksi ja päätöksiksi) nimen sanoilla, vuosilla ja tilalla (vireillä tai hyväksytty). Palauttaa COM-tunnuksen, päivän, menettelytunnuksen (esim. 2021/0106(COD)), tilan ja hyväksytyn säädöksen.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        hakusana: { type: "string", description: "Sanat, jotka ehdotuksen nimessä on oltava. Vähintään 4 merkin sanat katkaistaan vartaloksi, esim. \"kosmeettis\", \"lääkinnällis laittei\"." },
+        tila: { type: "string", enum: ["vireilla", "hyvaksytty"], description: "vireilla = käsittely kesken, hyvaksytty = säädös annettu. Valinnainen." },
+        alkaen_vuosi: { type: "integer", description: "Ensimmäinen vuosi (valinnainen)." },
+        paattyen_vuosi: { type: "integer", description: "Viimeinen vuosi (valinnainen)." },
+        kieli: common.kieli,
+        sivu: { type: "integer", description: "Tulossivu (10 ehdotusta sivulla)." },
+      },
+    },
+  },
+  {
+    name: "eu_ehdotus",
+    description:
+      "Palauttaa komission säädösehdotuksen tiedot: nimi, COM-tunnus, antopäivä, valmistellut pääosasto, menettely ja sen tyyppi, tila, hyväksytty säädös, säädökset joita ehdotus muuttaisi, sekä käsittelyn vaiheet päivämäärineen (komissio, Euroopan parlamentti, neuvosto, lausunnot). Ehdotuksen artiklat saa hae_eu_artikla-työkalulla COM-tunnuksella.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ehdotus: { type: "string", description: "COM-tunnus (\"COM(2021) 206\") tai CELEX-numero (\"52021PC0206\")." },
+        kaikki_vaiheet: { type: "boolean", description: "true = jokainen vaihe erikseen (oletus: peräkkäiset samanlaiset vaiheet tiivistetään)." },
+        kieli: common.kieli,
+      },
+      required: ["ehdotus"],
+    },
+  },
 ];
 
 const TITLES = {
@@ -197,6 +230,8 @@ const TITLES = {
   etsi_eu_saadoksesta: "Etsi EU-säädöksen tekstistä",
   hae_eu_tuomioita: "Hae EU-tuomioita",
   eu_tuomio: "EU-tuomio",
+  hae_eu_ehdotuksia: "Hae komission säädösehdotuksia",
+  eu_ehdotus: "Komission säädösehdotus",
   tuotevaroitukset: "EU:n tuotevaroitukset (Safety Gate)",
   eu_laiterekisteri: "EU:n lääkinnällisten laitteiden rekisteri (EUDAMED)",
 };
@@ -208,6 +243,7 @@ for (const t of TOOLS) {
 
 class UserError extends Error {}
 
+const lc1 = (s) => (s ? s[0].toLowerCase() + s.slice(1) : s);
 const asLang = (v) => (v === "sv" || v === "en" ? v : "fi");
 
 function fmtDate(iso) {
@@ -359,6 +395,11 @@ const normId = (s) =>
 function header(info, ver, lang) {
   const lines = [info.title || shortId(info.celex)];
   lines.push(`Tunnus: ${shortId(info.celex)}, CELEX ${info.celex}${info.eli ? `, ELI ${info.eli}` : ""}.`);
+  if (info.celex.startsWith("5")) {
+    lines.push(`Teksti: KOMISSION EHDOTUS (${shortId(info.celex)}). ${PROPOSAL_NOTE} Menettelyn tila ja hyväksytty säädös: eu_ehdotus-työkalulla.`);
+    lines.push(`Lähde: ${eurlexUrl(info.celex, lang)}`);
+    return lines.join("\n");
+  }
   if (info.inForce === false) lines.push(`VOIMASSAOLO: säädös EI ole voimassa${info.endOfValidity ? ` (päättynyt ${fmtDate(info.endOfValidity)})` : ""}.`);
   if (ver.kind === "consolidated") {
     lines.push(
@@ -435,6 +476,9 @@ async function haeEuSaadoksia(args) {
 }
 
 async function euSaadosTiedot(args) {
+  if (/^\s*COM\b/i.test(String(args.saados ?? "")) || /^5\d{4}(PC|DC)/i.test(String(args.saados ?? "").trim())) {
+    return euEhdotus({ ehdotus: args.saados, kieli: args.kieli });
+  }
   const { lang, celex, info, versions } = await loadAct(args);
   const ver = chooseVersion(celex, versions, args.versio);
   const [rels, doc] = await Promise.all([relations(celex, lang), loadDoc(ver.celex, lang)]);
@@ -693,6 +737,101 @@ async function euTuomio(args) {
   return clip(out.join("\n"));
 }
 
+// ---------- Komission säädösehdotukset ----------
+
+const PROPOSAL_NOTE =
+  "Komission ehdotus ei ole voimassa olevaa oikeutta. Parlamentti ja neuvosto voivat muuttaa sitä, ja hyväksytty säädös voi poiketa siitä merkittävästi.";
+const procUrl = (proc, lang) => {
+  const m = String(proc ?? "").match(/^(\d{4})\/(\d+)/);
+  return m ? `https://eur-lex.europa.eu/procedure/${LANGS[lang].eurlex}/${m[1]}_${+m[2]}` : null;
+};
+const STATUS_FI = { PROP_PENDING: "vireillä", PROP_ADOPTED: "hyväksytty (säädös annettu)", PROP_WITHDRAWN: "peruttu" };
+
+async function resolveProposal(v) {
+  const raw = String(v ?? "").trim();
+  if (!raw) throw new UserError('Anna ehdotus, esim. "COM(2021) 206" tai CELEX "52021PC0206".');
+  const up = raw.toUpperCase().replace(/\s+/g, "");
+  const cands = /^5\d{4}(PC|DC)\d{4}/.test(up) ? [up] : parseComRef(raw);
+  if (!cands) throw new UserError(`Ehdotusta "${raw}" ei tunnistettu. Anna muodossa "COM(2021) 206" tai CELEX-numerona (52021PC0206).`);
+  const found = await existing(cands);
+  if (!found.length) throw new UserError(`Asiakirjaa ${cands.map(shortId)[0]} ei löytynyt. Etsi ehdotuksia hae_eu_ehdotuksia-työkalulla.`);
+  return found[0];
+}
+
+async function haeEuEhdotuksia(args) {
+  const lang = asLang(args.kieli);
+  const tila = args.tila;
+  if (tila && !["vireilla", "hyvaksytty"].includes(tila)) throw new UserError("tila: vireilla tai hyvaksytty.");
+  const from = args.alkaen_vuosi ? +args.alkaen_vuosi : null;
+  const to = args.paattyen_vuosi ? +args.paattyen_vuosi : null;
+  if (!args.hakusana && !from && !to && !tila) throw new UserError("Anna hakusana, vuosi tai tila (esim. tila: vireilla).");
+  const page = Math.max(1, Number.parseInt(args.sivu, 10) || 1);
+  const rows = await searchProposals({ words: args.hakusana, from, to, tila, lang, page });
+  if (!rows.length) return page > 1 ? "Ei enempää tuloksia." : "Ei osumia. Kokeile sanan vartaloa (esim. \"kosmeettis\"), toista sanaa tai laajempaa vuosiväliä.";
+  const out = [`Komission säädösehdotukset (sivu ${page}, uusimmasta vanhimpaan):`, ""];
+  for (const r of rows.slice(0, 10)) {
+    const bits = [fmtDate(r.date), r.procs.length ? `menettely ${r.procs.join(", ")}` : null, r.status.length ? STATUS_FI[r.status[0]] ?? r.status[0] : null, r.adopted.length ? `säädös ${r.adopted.map(shortId).join(", ")}` : null].filter(Boolean);
+    out.push(`${shortId(r.celex)} (CELEX ${r.celex}), ${bits.join(", ")}`);
+    out.push(`  ${String(r.title).replace(/\s+/g, " ").slice(0, 400)}`);
+  }
+  if (rows.length > 10) out.push("", `Lisää tuloksia: sivu ${page + 1}.`);
+  out.push("", "Menettelyn vaiheet eu_ehdotus-työkalulla; ehdotuksen artiklat hae_eu_artikla-työkalulla (saados: \"COM(vuosi) numero\"). Vanhoilla ehdotuksilla menettelytietoja ei aina ole.");
+  return clip(out.join("\n"));
+}
+
+async function euEhdotus(args) {
+  const lang = asLang(args.kieli);
+  const celex = await resolveProposal(args.ehdotus);
+  const info = await proposalInfo(celex, lang);
+  if (!info) throw new UserError(`Ehdotuksen ${shortId(celex)} tietoja ei löytynyt.`);
+  const out = [String(info.title).replace(/\s+/g, " ").trim() || shortId(celex)];
+  out.push(`Tunnus: ${shortId(celex)}, CELEX ${celex}${info.titleLang !== lang ? " (nimi englanniksi; kieliversiota ei ole)" : ""}.`);
+  if (info.date) out.push(`Annettu: ${fmtDate(info.date)}${info.dg ? `, valmistellut ${info.dg}` : ""}.`);
+  if (info.procedure) out.push(`Menettely: ${info.procedure}${info.procedureType ? `, ${lc1(info.procedureType)}` : ""}.`);
+  const st = info.withdrawn ? "peruttu" : info.statusLabel ?? STATUS_FI[info.status] ?? null;
+  if (st) out.push(`Tila: ${lc1(st)}${info.adoptedDate && info.status === "PROP_ADOPTED" ? ` (${fmtDate(info.adoptedDate)})` : ""}.`);
+  if (info.adopted.length) {
+    const names = await titles(info.adopted, lang).catch(() => ({}));
+    out.push("", "Hyväksytty säädös:", ...info.adopted.map((c) => `- ${shortId(c)} (CELEX ${c})${names[c] ? `: ${names[c].slice(0, 250)}` : ""}`));
+    out.push("Voimassa oleva teksti: hae_eu_artikla tai eu_saados_tiedot hyväksytyn säädöksen numerolla.");
+  }
+  if (info.amends.length) out.push("", `Ehdotus muuttaisi säädöksiä (${info.amends.length}): ${info.amends.slice(0, 30).map(shortId).join(", ")}${info.amends.length > 30 ? " …" : ""}`);
+
+  if (info.events.length) {
+    // Toistuvat samanlaiset vaiheet (esim. neuvoston valmisteluelinten käsittelyt) tiivistetään.
+    const all = args.kaikki_vaiheet === true;
+    const lines = [];
+    let prev = null;
+    let count = 0;
+    let first = null;
+    const flush = () => {
+      if (!prev) return;
+      lines.push(`- ${fmtDate(first)}${count > 1 ? `–${fmtDate(prev.date)} (${count} kertaa)` : ""} ${prev.label ?? prev.code}${prev.inst ? ` [${prev.inst}]` : ""}`);
+    };
+    for (const e of info.events) {
+      if (!all && prev && prev.code === e.code) {
+        count++;
+        prev = e;
+        continue;
+      }
+      flush();
+      prev = e;
+      first = e.date;
+      count = 1;
+    }
+    flush();
+    out.push("", `Vaiheet (${info.events.length}):`, ...lines.slice(0, 80));
+    if (lines.length > 80) out.push(`… ja ${lines.length - 80} muuta.`);
+  } else {
+    out.push("", "Menettelyn vaiheita ei ole julkaisutoimiston aineistossa (koskee erityisesti vanhoja ehdotuksia).");
+  }
+  out.push("", PROPOSAL_NOTE, `Ehdotuksen teksti: hae_eu_artikla tai etsi_eu_saadoksesta (saados: "${shortId(celex)}").`);
+  out.push(`Lähde: ${eurlexUrl(celex, lang)}`);
+  const pu = procUrl(info.procedure, lang);
+  if (pu) out.push(`Menettely EUR-Lexissä: ${pu}`);
+  return clip(out.join("\n"));
+}
+
 // ---------- Safety Gate ----------
 
 const SG_SOURCE = "Lähde: EU Safety Gate (Euroopan komissio), viikkoraportit, avoin data CC0";
@@ -889,6 +1028,8 @@ const HANDLERS = {
   etsi_eu_saadoksesta: etsiEuSaadoksesta,
   hae_eu_tuomioita: haeEuTuomioita,
   eu_tuomio: euTuomio,
+  hae_eu_ehdotuksia: haeEuEhdotuksia,
+  eu_ehdotus: euEhdotus,
   tuotevaroitukset,
   eu_laiterekisteri: euLaiterekisteri,
 };

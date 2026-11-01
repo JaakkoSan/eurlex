@@ -25,7 +25,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * Hakee URL:n tekstinä (GET). 404 palauttaa null. ttl sekunteina, 0 = ei välimuistia.
  * Välimuistiavaimeen lisätään otsakkeet, joilla sisältöneuvottelu tehdään.
  */
-export async function fetchText(url, { ttl = 3600, headers = {} } = {}) {
+export async function fetchText(url, { ttl = 3600, headers = {}, allow300 = false } = {}) {
   const cache = cacheApi();
   const keyParts = Object.entries(headers)
     .sort()
@@ -50,7 +50,8 @@ export async function fetchText(url, { ttl = 3600, headers = {} } = {}) {
       if (cache && ttl > 0) await cache.put(cacheKey, new Response("", { status: 404, headers: { "Cache-Control": "max-age=600" } }));
       return null;
     }
-    if (res.ok) {
+    // 300 Multiple Choices: Cellar palauttaa luettelon, kun kieliversiossa on useita tiedostoja (esim. ehdotus ja liitteet).
+    if (res.ok || (allow300 && res.status === 300)) {
       const body = await res.text();
       if (cache && ttl > 0) {
         await cache.put(cacheKey, new Response(body, { headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": `max-age=${ttl}` } }));
