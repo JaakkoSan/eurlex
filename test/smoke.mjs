@@ -30,7 +30,7 @@ function check(cond, label) {
 const init = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } });
 check(init.result?.serverInfo?.name === "eurlex", "initialize");
 const list = await rpc("tools/list", {});
-check(list.result?.tools?.length === 6, "tools/list (6 työkalua)");
+check(list.result?.tools?.length === 8, "tools/list (8 työkalua)");
 
 const show = process.argv.includes("-v");
 const cases = [
@@ -49,6 +49,11 @@ const cases = [
   ["eu_tuomio", { tuomio: "C-311/18" }, (t) => t.includes("Tuomiolauselma") && t.includes("ECLI:EU:C:2020:559")],
   ["eu_tuomio", { tuomio: "ECLI:EU:C:2020:559", kohdat: "134" }, (t) => t.includes("\n134 Tältä osin")],
   ["eu_tuomio", { tuomio: "C-1/99" }, (t) => t.includes("Tuomiolauselma") && t.includes("Yhteisöjen")],
+  ["tuotevaroitukset", { kategoria: "kosmetiikka", viikkoja: 4 }, (t) => /\nSR\/\d+\/\d+ · /.test(t) && t.includes("Kosmetiikka") && t.includes("CC0")],
+  ["tuotevaroitukset", { hakusana: "zzqxw-ei-ole", viikkoja: 1 }, (t) => t.includes("ei osumia")],
+  ["eu_laiterekisteri", { valmistaja: "planmeca" }, (t) => t.includes("FI-MF-000006499") && t.includes("valmistaja")],
+  ["eu_laiterekisteri", { srn: "FI-MF-000006499", laite: "compact" }, (t) => t.includes("UDI-DI") && t.includes("MDR")],
+  ["eu_laiterekisteri", { udi_di: "00840682119696" }, (t) => t.includes("GE Healthcare Finland Oy") && t.includes("Riskiluokka: I luokka")],
 ];
 
 for (const [name, args, pred] of cases) {

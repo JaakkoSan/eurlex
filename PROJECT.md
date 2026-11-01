@@ -17,6 +17,7 @@ Oma Claude-liitin EU-säädöksille ja EU-tuomioistuimen ratkaisuille. Tehty 31.
 - `src/tools.js`: työkalujen määrittelyt ja toteutus, version valinta, hakemiston osat
 - `src/cellar.js`: säädös- ja tuomioviitteen tulkinta, SPARQL-kyselyt, asiakirjan haku
 - `src/doc.js`: XHTML/HTML-asiakirjan jäsennys kappaleiksi ja hakemistoksi (artiklat, johdanto-osa, liitteet, sisällysluettelo, muutosmerkintöjen selite; tuomioista numeroidut kohdat, väliotsikot ja tuomiolauselma)
+- `src/products.js`: Safety Gate -viikkoraporttien ja EUDAMED-rajapinnan haku ja jäsennys
 - `src/http.js`: HTTP, Cache API ja isolaatin muistivälimuisti
 - `src/xml.js`: pieni XML-jäsennin (sama kuin Finlex-liittimessä)
 - `test/smoke.mjs`: savutesti oikeaa rajapintaa vasten
@@ -26,3 +27,4 @@ Oma Claude-liitin EU-säädöksille ja EU-tuomioistuimen ratkaisuille. Tehty 31.
 - 31.10.2026 v1.0: hae_eu_saadoksia, eu_saados_tiedot, hae_eu_artikla, etsi_eu_saadoksesta.
 - 31.10.2026 v1.0.1: säädöksen tunnistus, perustiedot ja versiot yhtenä välimuistimerkintänä; sisällysluettelo omana osanaan (vähemmän välimuistilukuja kutsua kohden, tuotannossa artiklahaku oli 7–12 ms).
 - 31.10.2026 v1.1.0: EU-tuomioistuimen ratkaisut: hae_eu_tuomioita (tulkitun säädöksen ja artiklan mukaan tai otsikon sanoilla) ja eu_tuomio (tuomiolauselma, kohdat, sanahaku). Ennen vuotta 1999 annettujen asetusten numero kahdella vuosinumerolla (N:o 2913/92).
+- 1.11.2026 v1.2.0: tuotevaroitukset (EU Safety Gate -viikkoraportit suomeksi, haku sanalla, viivakoodilla, tuoteluokalla ja ilmoittajamaalla) ja eu_laiterekisteri (EUDAMEDin julkinen rajapinta: laite UDI-DI:llä, toimija ja laitteet SRN:llä, toimijahaku nimellä). CosIngille ei löytynyt virallista avointa lähdettä, joten se jätettiin pois.

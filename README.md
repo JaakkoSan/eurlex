@@ -1,6 +1,6 @@
 # eurlex-mcp
 
-Claude-liitin (MCP-palvelin), joka hakee EU-säädösten (asetukset, direktiivit, päätökset) ja EU-tuomioistuimen ratkaisujen sanatarkan tekstin ja tiedot EU:n julkaisutoimiston avoimesta tietokannasta (Cellar). Aineisto on sama kuin EUR-Lexissä. Toimii Cloudflare Workerina, ei tallenna mitään eikä tarvitse API-avaimia tai rekisteröitymistä.
+Claude-liitin (MCP-palvelin), joka hakee EU-säädösten (asetukset, direktiivit, päätökset) ja EU-tuomioistuimen ratkaisujen sanatarkan tekstin ja tiedot EU:n julkaisutoimiston avoimesta tietokannasta (Cellar). Aineisto on sama kuin EUR-Lexissä. Lisäksi EU:n tuoterekistereistä vaarallisten kulutustuotteiden hälytykset (Safety Gate) ja lääkinnällisten laitteiden tiedot (EUDAMED). Toimii Cloudflare Workerina, ei tallenna mitään eikä tarvitse API-avaimia tai rekisteröitymistä.
 
 ## Työkalut
 
@@ -12,6 +12,8 @@ Claude-liitin (MCP-palvelin), joka hakee EU-säädösten (asetukset, direktiivit
 | `etsi_eu_saadoksesta` | Sanahaku yhden säädöksen tekstistä, palauttaa osumat artikloittain |
 | `hae_eu_tuomioita` | Unionin tuomioistuimen ja unionin yleisen tuomioistuimen tuomiot ja määräykset, jotka tulkitsevat annettua säädöstä tai artiklaa, tai haku otsikon sanoilla |
 | `eu_tuomio` | Tuomion perustiedot, tulkitut säännökset ja tuomiolauselma; lisäksi numeroidut kohdat tai sanahaku tuomion tekstistä |
+| `tuotevaroitukset` | EU Safety Gate -hälytykset vaarallisista kulutustuotteista suomeksi: haku sanalla tai viivakoodilla, tuoteluokalla ja ilmoittajamaalla viimeisimmistä viikkoraporteista |
+| `eu_laiterekisteri` | EUDAMED: lääkinnällisen laitteen tiedot UDI-DI- tai Basic UDI-DI -tunnuksella, toimijan tiedot ja laitteet SRN-tunnuksella, toimijahaku nimellä ja maalla |
 
 Säädöksen voi antaa numerona (`2016/679`, `93/13/ETY`, `asetus (EY) N:o 1907/2006`), CELEX-numerona (`32016R0679`) tai ELI-osoitteena. Kieli: suomi (oletus), ruotsi tai englanti.
 
@@ -28,6 +30,12 @@ Säädöksen voi antaa numerona (`2016/679`, `93/13/ETY`, `asetus (EY) N:o 1907/
 - Metatiedot ja haku: SPARQL `https://publications.europa.eu/webapi/rdf/sparql` (CDM-ontologia)
 - Konsolidoidut versiot: `cdm:act_consolidated_based_on_resource_legal`
 - Välimuisti: asiakirjan hakemisto 30 vrk (tietty CELEX-versio ei muutu), metatiedot 6 h (Cloudflaren Cache API). Asiakirja jäsennetään kerran ja tallennetaan osina (perustiedot ja kappaleosat), jotta kutsu pysyy Workersin ilmaistason CPU-rajan alla.
+
+## Tuoterekisterit
+
+- Safety Gate: viikkoraporttien XML (`https://ec.europa.eu/safety-gate-alerts/api/download/weeklyReport/list/xml/fi` ja raportin osoite luettelosta), suomeksi. Avoin data CC0 (data.europa.eu). Uusi raportti julkaistaan perjantaisin. Luettelo välimuistissa 6 h, julkaistu raportti 30 vrk. Haku käy läpi oletuksena 8 ja enintään 52 viimeisintä raporttia.
+- EUDAMED: komission julkinen rajapinta `https://api.datalake.sante.service.ec.europa.eu/eudamed/{actors|udi|reference}?api-version=v1.0&format=json`, ei avainta. Suodattimet ovat tarkkoja kenttiä (`PRIMARY_DI`, `BASIC_UDI`, `MF_SRN`, `ACTOR_ID`, `ACT_COUNTRY_ISO2_CODE`), joten laitteen nimellä ei voi hakea ilman toimijaa. Rajapinta palauttaa saman tietueen useana kopiona; uusin versio pidetään. Riskiluokka, säädös ja markkinatila suomeksi viitetiedoista (`reference`, `LANGUAGE=fi`). Toimijan vaatimusten noudattamisesta vastaavan henkilön (PRRC) nimeä ja sähköpostiosoitetta ei näytetä.
+- EUDAMEDin selainkäyttöliittymän sisäistä rajapintaa ei käytetä. Kosmeettisten aineiden CosIng-tietokannalle ei löytynyt virallista avointa rajapintaa tai latausta, joten se ei ole mukana.
 
 ## Oikeuskäytäntö
 
@@ -67,7 +75,9 @@ Cloudflare Workers Builds julkaisee automaattisesti pushista main-haaraan (`npx 
 - Osa vanhemmista alkuperäisistä teksteistä on julkaisutoimiston aineistossa vain PDF:nä. Niistä liitin ohjaa konsolidoituun tekstiin tai EUR-Lexiin.
 - Tuomioiden haku kohdistuu otsikoihin ja julkaisutoimiston luokitteluun, ei koko tekstiin.
 - Direktiivi velvoittaa jäsenvaltioita; yksityisiin sovelletaan yleensä kansallista täytäntöönpanolakia.
+- Safety Gate -hälytys koskee kuvattua tuotetta, mallia ja erää. Hälytyksistä puuttuvat kuvat; linkki vie hälytyksen sivulle.
+- EUDAMEDissa ovat vain rekisteröidyt laitteet ja toimijat. Puuttuminen ei yksin tarkoita, ettei laite olisi markkinakelpoinen.
 
 ## Lisenssi ja lähde
 
-Koodi: MIT, ks. [LICENSE](LICENSE). Data: © Euroopan unioni, https://eur-lex.europa.eu. Komission asiakirjojen uudelleenkäyttö on sallittua kaupallisiin ja ei-kaupallisiin tarkoituksiin maksutta (komission päätös 2011/833/EU); lähde on mainittava eikä alkuperäistä merkitystä saa vääristää. Vain EU:n virallisessa lehdessä julkaistut tekstit ovat todistusvoimaisia. Tämä ei ole EU:n julkaisutoimiston palvelu.
+Koodi: MIT, ks. [LICENSE](LICENSE). Data: © Euroopan unioni, https://eur-lex.europa.eu. Komission asiakirjojen uudelleenkäyttö on sallittua kaupallisiin ja ei-kaupallisiin tarkoituksiin maksutta (komission päätös 2011/833/EU); lähde on mainittava eikä alkuperäistä merkitystä saa vääristää. Vain EU:n virallisessa lehdessä julkaistut tekstit ovat todistusvoimaisia. Safety Gate -raportit: Euroopan komissio, CC0. EUDAMED: © Euroopan unioni, komission julkinen rajapinta. Tämä ei ole EU:n julkaisutoimiston palvelu.
