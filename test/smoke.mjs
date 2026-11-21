@@ -32,6 +32,37 @@ check(init.result?.serverInfo?.name === "eurlex", "initialize");
 const list = await rpc("tools/list", {});
 check(list.result?.tools?.length === 10, "tools/list (10 työkalua)");
 
+// Virhetekstit (22.11.2026): odottamattoman poikkeuksen teksti ei näy vastauksessa eikä lokissa;
+// tarkoitukselliset virheet (syötteen muoto, lähteen tila) näkyvät yhä.
+{
+  const SALAISUUS = "SISAINEN-salaisuus-xyz";
+  const orig = globalThis.fetch;
+  const origErr = console.error;
+  const loki = [];
+  console.error = (...a) => loki.push(a.map(String).join(" "));
+  try {
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      text: async () => { throw new Error(SALAISUUS); },
+      json: async () => { throw new Error(SALAISUUS); },
+      arrayBuffer: async () => { throw new Error(SALAISUUS); },
+    });
+    const r = await tool("eu_saados_tiedot", { saados: "1999/93" });
+    check(r.isError && !r.text.includes(SALAISUUS) && r.text.includes("Haku epäonnistui"), "virheteksti: odottamaton poikkeus piilotetaan vastauksesta");
+    check(loki.length > 0 && !loki.some((l) => l.includes(SALAISUUS)) && loki.some((l) => l.includes("eu_saados_tiedot") && l.includes("Error")), "virheteksti: lokiin vain työkalu ja virheen nimi");
+    globalThis.fetch = async () => new Response("", { status: 400 });
+    const f = await tool("eu_saados_tiedot", { saados: "1999/94" });
+    check(f.isError && f.text.includes("ei vastannut (Lähde vastasi 400)"), "virheteksti: lähteen tila (400) näkyy yhä");
+  } finally {
+    globalThis.fetch = orig;
+    console.error = origErr;
+  }
+  const u = await tool("hae_eu_artikla", { saados: "2016/679" });
+  check(u.isError && u.text.includes("Anna yksi: artikla"), "virheteksti: syötteen muotovirhe näkyy yhä");
+}
+
 const show = process.argv.includes("-v");
 const cases = [
   ["hae_eu_saadoksia", { hakusana: "tietosuoj", tyyppi: "asetus" }, (t) => t.includes("CELEX 3")],
