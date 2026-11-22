@@ -10,11 +10,14 @@ Oma Claude-liitin EU-säädöksille ja EU-tuomioistuimen ratkaisuille. Tehty 31.
 - Oletuksena uusin jo voimassa oleva konsolidoitu teksti; tulevat versiot merkitään näkyvästi.
 - Asiakirja jäsennetään kerran hakemistoksi ja tallennetaan osina (ilmaistason 10 ms CPU-raja). Osien määrä on rajattu, koska jokainen tallennus on alipyyntö (enintään 50).
 - Uudelleenkäytön ehdot: komission päätös 2011/833/EU (luettu Cellarista 31.10.2026): uudelleenkäyttö sallittu kaupallisesti ja ei-kaupallisesti maksutta (4 ja 9 artikla), ehtoina lähteen mainitseminen ja merkityksen vääristämättä jättäminen (6 artikla).
+- Koodiajo-valmius ja yhteinen runko (22.11.2026, v1.4.0, ei julkaistu, haara runko-1-1-0): liitin siirrettiin yhteiseen runkoon mcp-runko 1.1.0. Kaikki kymmenen työkalua on määritelty tyokalu()-muodossa oikeudella luku (logiikka tools.js:n funktioissa, työkalu ohut kuori). Hakulistat hae_eu_saadoksia, hae_eu_tuomioita ja hae_eu_ehdotuksia antavat rakenteisen tuloksen ja outputSchemaan kuvatun sivutuksen (sivu, sivuja, seuraava); sanatarkka teksti pysyy tekstinä, ja hae_eu_artikla antaa rakenteena vain tunnuksen, version ja Lähde-linkin. Tekstitulosteet ennallaan (verrattu 33 kutsulla 1.3.0:n tulosteeseen). Virheet rakenteisina (syote, ei_loydy, lahde, yleinen); odottamattoman poikkeuksen tekstiä ei näytetä. serverInfo ja User-Agent saavat version package.jsonista (User-Agent nyt eurlex-mcp/1.4.0). Polku: julkinen /mcp aina (aiemmin MCP_PATH_SECRET-salaisuus olisi sulkenut /mcp:n; salaisuutta ei ole asetettu). Uutena protokolla 2025-11-25 ja 2026-07-28 sekä Origin-tarkistus rungosta.
 
 ## Rakenne
 
-- `src/index.js`: MCP-protokolla ja käyttörajoitus
-- `src/tools.js`: työkalujen määrittelyt ja toteutus, version valinta, hakemiston osat
+- `src/index.js`: palvelimen kokoaminen yhteisellä rungolla (serverInfo versio package.jsonista, ohjeet, käyttörajoitus)
+- `src/mcp-runko.js`: yhteinen runko (kopio mcp-runkosta, ei muokata tässä repossa)
+- `src/tyokalut.js`: työkalujen määrittelyt rungon tyokalu()-muodossa (syöte- ja tulosskeemat, oikeus luku, virheiden koodit)
+- `src/tools.js`: työkalujen logiikka (hakulistojen data ja tekstin muotoilu), version valinta, hakemiston osat
 - `src/cellar.js`: säädös- ja tuomioviitteen tulkinta, SPARQL-kyselyt, asiakirjan haku
 - `src/doc.js`: XHTML/HTML-asiakirjan jäsennys kappaleiksi ja hakemistoksi (artiklat, johdanto-osa, liitteet, sisällysluettelo, muutosmerkintöjen selite; tuomioista numeroidut kohdat, väliotsikot ja tuomiolauselma)
 - `src/products.js`: Safety Gate -viikkoraporttien ja EUDAMED-rajapinnan haku ja jäsennys

@@ -1,6 +1,10 @@
 // HTTP-apu: Cloudflaren Cache API, uudelleenyritykset ja isolaatin muistivälimuisti.
 
-const USER_AGENT = "eurlex-mcp/1.0 (Claude-liitin; Cloudflare Worker)";
+import { userAgent } from "./mcp-runko.js";
+import pkg from "../package.json" with { type: "json" };
+
+// Versio package.jsonista, sama kuin SERVER_INFOssa.
+const USER_AGENT = userAgent("eurlex", pkg.version);
 const RETRY_STATUS = new Set([429, 500, 502, 503, 504]);
 const MAX_ATTEMPTS = 3;
 

@@ -1,4 +1,4 @@
-// MCP-työkalut: määrittelyt ja toteutukset.
+// Työkalujen logiikka: haut lähteistä, hakulistojen data ja tekstien muotoilu. Määrittelyt: tyokalut.js.
 
 import {
   parseActRef,
@@ -26,6 +26,7 @@ import {
 } from "./cellar.js";
 import { buildDocIndex, DOC_INDEX_VERSION } from "./doc.js";
 import { getDerived, putDerived, SourceError } from "./http.js";
+import { sivutieto } from "./mcp-runko.js";
 import {
   sgReports,
   sgReport,
@@ -51,193 +52,7 @@ const DOC_TTL = 30 * 86400;
 const SHARD_CHARS = 40_000;
 const MAX_SHARDS = 16;
 
-const common = {
-  saados: {
-    type: "string",
-    description:
-      "Säädös: numero (\"2016/679\", \"93/13/ETY\", \"asetus (EY) N:o 1907/2006\"), CELEX-numero (\"32016R0679\") tai ELI-osoite. Pelkällä numerolla anna myös tyyppi, jos sama numero on usealla säädöstyypillä.",
-  },
-  tyyppi: { type: "string", enum: ["asetus", "direktiivi", "paatos"], description: "Säädöstyyppi (valinnainen)." },
-  kieli: { type: "string", enum: ["fi", "sv", "en"], description: "Kieliversio: fi (oletus), sv tai en." },
-  versio: {
-    type: "string",
-    description:
-      "Valinnainen. \"alkuperainen\" = EU:n virallisessa lehdessä julkaistu alkuperäinen teksti. Päivämäärä (VVVV-KK-PP) = konsolidoitu teksti sellaisena kuin se oli voimassa tuona päivänä. Oletus: uusin jo voimassa oleva konsolidoitu teksti.",
-  },
-};
-
-export const TOOLS = [
-  {
-    name: "hae_eu_saadoksia",
-    description:
-      "Hakee EU-säädöksiä (asetukset, direktiivit, päätökset) nimen sanoilla EU:n julkaisutoimiston tietokannasta (EUR-Lexin aineisto). Palauttaa tunnukset, CELEX-numerot, päivämäärät ja nimet uusimmasta vanhimpaan. Käytä sanan vartaloa, esim. \"tietosuoj\", \"lääkinnällis laittei\".",
-    inputSchema: {
-      type: "object",
-      properties: {
-        hakusana: { type: "string", description: "Sanat, jotka säädöksen nimessä on oltava (kaikki). Vähintään 4 merkin sanat katkaistaan vartaloksi." },
-        tyyppi: common.tyyppi,
-        vain_voimassa: { type: "boolean", description: "Vain voimassa olevat (oletus true)." },
-        alkaen_vuosi: { type: "integer", description: "Ensimmäinen vuosi (valinnainen)." },
-        paattyen_vuosi: { type: "integer", description: "Viimeinen vuosi (valinnainen)." },
-        kieli: common.kieli,
-        sivu: { type: "integer", description: "Tulossivu, 1 = ensimmäinen. Sivulla enintään 10 tulosta." },
-      },
-      required: ["hakusana"],
-    },
-  },
-  {
-    name: "eu_saados_tiedot",
-    description:
-      "Palauttaa EU-säädöksen tiedot: nimi, CELEX- ja ELI-tunnus, antopäivä, voimaantulo- ja soveltamispäivät, voimassaolo, konsolidoidut versiot (myös tulevat), muuttavat ja kumoavat säädökset sekä sisällysluettelo (luvut, artiklat ja liitteet).",
-    inputSchema: {
-      type: "object",
-      properties: { saados: common.saados, tyyppi: common.tyyppi, versio: common.versio, kieli: common.kieli },
-      required: ["saados"],
-    },
-  },
-  {
-    name: "hae_eu_artikla",
-    description:
-      "Palauttaa EU-säädöksen artiklan, johdanto-osan perustelukappaleen tai liitteen sanatarkan tekstin. Oletuksena uusin voimassa oleva konsolidoitu teksti; johdanto-osan perustelukappaleet ovat vain alkuperäisessä tekstissä. Anna yksi: artikla, johdanto_kappale tai liite.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        saados: common.saados,
-        tyyppi: common.tyyppi,
-        artikla: { type: "string", description: "Artiklan numero, esim. \"6\" tai \"10 a\"." },
-        johdanto_kappale: { type: "string", description: "Johdanto-osan perustelukappaleen numero, esim. \"47\"." },
-        liite: { type: "string", description: "Liitteen numero, esim. \"I\" tai \"XVI\". Jos liitteitä on yksi, \"1\"." },
-        versio: common.versio,
-        kieli: common.kieli,
-      },
-      required: ["saados"],
-    },
-  },
-  {
-    name: "etsi_eu_saadoksesta",
-    description:
-      "Etsii yhden EU-säädöksen tekstistä sanaa tai sanontaa ja palauttaa osumat artikloittain (sekä johdanto-osan perustelukappaleet ja liitteet) lyhyine otteineen. Haku on kirjaimellinen: käytä sanan vartaloa.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        saados: common.saados,
-        tyyppi: common.tyyppi,
-        hakusana: { type: "string", description: "Etsittävä merkkijono (kirjainkoolla ei väliä)." },
-        versio: common.versio,
-        kieli: common.kieli,
-      },
-      required: ["saados", "hakusana"],
-    },
-  },
-  {
-    name: "hae_eu_tuomioita",
-    description:
-      "Hakee EU-tuomioistuimen ja unionin yleisen tuomioistuimen tuomioita: joko tuomiot, jotka tulkitsevat tiettyä säädöstä tai sen artiklaa (esim. tietosuoja-asetuksen 6 artikla), tai haku otsikon sanoilla (otsikossa ovat asianosaiset ja usein asiasanat). Palauttaa asianumerot, päivämäärät, ECLI-tunnukset ja tulkitut kohdat uusimmasta vanhimpaan.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        saados: { ...common.saados, description: "Säädös, jota tuomiot tulkitsevat (kuten muissa työkaluissa). Valinnainen, jos hakusana annetaan." },
-        tyyppi: common.tyyppi,
-        artikla: { type: "string", description: "Artikla, jota tuomiot tulkitsevat, esim. \"6\". Vaatii säädöksen." },
-        hakusana: { type: "string", description: "Sanat tuomion otsikosta, esim. asianosainen (\"Schrems\") tai aihe (\"henkilötietojen\")." },
-        alkaen_vuosi: { type: "integer", description: "Ensimmäinen vuosi (valinnainen)." },
-        kieli: common.kieli,
-        sivu: { type: "integer", description: "Tulossivu, 1 = ensimmäinen. Sivulla enintään 10 tulosta." },
-      },
-    },
-  },
-  {
-    name: "eu_tuomio",
-    description:
-      "Palauttaa EU-tuomioistuimen tuomion: asianosaiset, päivämäärä, ECLI, tulkitut säännökset ja tuomiolauselma (ratkaisu). Parametrilla kohdat tuomion perustelujen numeroidut kohdat (esim. \"94-105\"), parametrilla hakusana osumat kohtineen.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        tuomio: { type: "string", description: "Asianumero (\"C-311/18\", \"T-604/18\"), CELEX-numero (\"62018CJ0311\") tai ECLI-tunnus." },
-        kohdat: { type: "string", description: "Numeroidut kohdat, esim. \"94-105\" tai \"134, 168-170\". Enintään 60 kohtaa kerralla. Valinnainen." },
-        hakusana: { type: "string", description: "Etsittävä merkkijono tuomion tekstistä. Valinnainen." },
-        kieli: common.kieli,
-      },
-      required: ["tuomio"],
-    },
-  },
-  {
-    name: "tuotevaroitukset",
-    description:
-      "Hakee EU:n Safety Gate -järjestelmän hälytyksiä vaarallisista kulutustuotteista (ei elintarvikkeet eikä lääkkeet) viikkoraporteista suomeksi: tuote, merkki, malli, viivakoodi, vaara, riskitaso, toimenpiteet (myynnistä poisto, takaisinveto) ja ilmoittajamaa. Esim. kosmetiikka, lelut, sähkölaitteet. Uusin ensin.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        hakusana: { type: "string", description: "Sana tai merkkijono, jota etsitään tuotteesta, merkistä, nimestä, mallista, kuvauksesta, vaarasta ja viivakoodista, esim. \"TPO\", \"geelilakka\", merkin nimi tai EAN-koodi. Valinnainen." },
-        kategoria: { type: "string", description: "Tuoteluokka suomeksi tai sen osa, esim. \"kosmetiikka\", \"lelut\", \"sähkölaitteet\". Valinnainen." },
-        maa: { type: "string", description: "Ilmoittajamaa suomeksi, esim. \"Suomi\", \"Ruotsi\". Valinnainen." },
-        viikkoja: { type: "integer", description: "Montako viimeisintä viikkoraporttia käydään läpi (oletus 8, enintään 52)." },
-      },
-    },
-  },
-  {
-    name: "eu_laiterekisteri",
-    description:
-      "Hakee EU:n lääkinnällisten laitteiden tietokannasta (EUDAMED) laitteen tai toimijan tiedot: riskiluokka, sovellettava säädös (MDR, IVDR tai vanha direktiivi), markkinatila, valmistaja ja sen SRN-tunnus. Hakutavat: udi_di (pakkauksen UDI-DI), basic_udi, srn (toimijan tunnus, esim. FI-MF-000006499; antaa myös laitteet) tai valmistaja + maa (nimen osa). Laitteen nimellä ei voi hakea ilman toimijaa.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        udi_di: { type: "string", description: "Laitteen ensisijainen UDI-DI (esim. pakkauksen GTIN-koodi). Valinnainen." },
-        basic_udi: { type: "string", description: "Basic UDI-DI. Valinnainen." },
-        srn: { type: "string", description: "Toimijan yksilöllinen rekisterinumero (SRN), esim. FI-MF-000006499. Valinnainen." },
-        laite: { type: "string", description: "Rajaa srn-haun laitteet nimen, mallin tai tuotenumeron osalla. Valinnainen." },
-        valmistaja: { type: "string", description: "Toimijan nimen osa (valmistaja, maahantuoja tai valtuutettu edustaja). Käytä maa-parametrin kanssa." },
-        maa: { type: "string", description: "Toimijan maa suomeksi tai ISO-koodina, esim. \"Suomi\", \"SE\" (oletus Suomi)." },
-      },
-    },
-  },
-  {
-    name: "hae_eu_ehdotuksia",
-    description:
-      "Hakee Euroopan komission säädösehdotuksia (COM-asiakirjat: ehdotukset asetuksiksi, direktiiveiksi ja päätöksiksi) nimen sanoilla, vuosilla ja tilalla (vireillä tai hyväksytty). Palauttaa COM-tunnuksen, päivän, menettelytunnuksen (esim. 2021/0106(COD)), tilan ja hyväksytyn säädöksen.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        hakusana: { type: "string", description: "Sanat, jotka ehdotuksen nimessä on oltava. Vähintään 4 merkin sanat katkaistaan vartaloksi, esim. \"kosmeettis\", \"lääkinnällis laittei\"." },
-        tila: { type: "string", enum: ["vireilla", "hyvaksytty"], description: "vireilla = käsittely kesken, hyvaksytty = säädös annettu. Valinnainen." },
-        alkaen_vuosi: { type: "integer", description: "Ensimmäinen vuosi (valinnainen)." },
-        paattyen_vuosi: { type: "integer", description: "Viimeinen vuosi (valinnainen)." },
-        kieli: common.kieli,
-        sivu: { type: "integer", description: "Tulossivu (10 ehdotusta sivulla)." },
-      },
-    },
-  },
-  {
-    name: "eu_ehdotus",
-    description:
-      "Palauttaa komission säädösehdotuksen tiedot: nimi, COM-tunnus, antopäivä, valmistellut pääosasto, menettely ja sen tyyppi, tila, hyväksytty säädös, säädökset joita ehdotus muuttaisi, sekä käsittelyn vaiheet päivämäärineen (komissio, Euroopan parlamentti, neuvosto, lausunnot). Ehdotuksen artiklat saa hae_eu_artikla-työkalulla COM-tunnuksella.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        ehdotus: { type: "string", description: "COM-tunnus (\"COM(2021) 206\") tai CELEX-numero (\"52021PC0206\")." },
-        kaikki_vaiheet: { type: "boolean", description: "true = jokainen vaihe erikseen (oletus: peräkkäiset samanlaiset vaiheet tiivistetään)." },
-        kieli: common.kieli,
-      },
-      required: ["ehdotus"],
-    },
-  },
-];
-
-const TITLES = {
-  hae_eu_saadoksia: "Hae EU-säädöksiä",
-  eu_saados_tiedot: "EU-säädöksen tiedot",
-  hae_eu_artikla: "Hae EU-säädöksen artikla",
-  etsi_eu_saadoksesta: "Etsi EU-säädöksen tekstistä",
-  hae_eu_tuomioita: "Hae EU-tuomioita",
-  eu_tuomio: "EU-tuomio",
-  hae_eu_ehdotuksia: "Hae komission säädösehdotuksia",
-  eu_ehdotus: "Komission säädösehdotus",
-  tuotevaroitukset: "EU:n tuotevaroitukset (Safety Gate)",
-  eu_laiterekisteri: "EU:n lääkinnällisten laitteiden rekisteri (EUDAMED)",
-};
-for (const t of TOOLS) {
-  t.annotations = { title: TITLES[t.name] ?? t.name, readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
-}
+// Työkalujen määrittelyt (nimet, kuvaukset, syöte- ja tulosskeemat) ovat tiedostossa tyokalut.js.
 
 // ---------- Apufunktiot ----------
 
@@ -265,7 +80,7 @@ async function resolveAct(args) {
   if (r.error) throw new UserError(r.error);
   const found = await existing(r.candidates);
   if (!found.length) {
-    throw new UserError(
+    throw new NotFoundError(
       `Säädöstä ${r.candidates.map(shortId).join(" / ")} ei löytynyt. Tarkista numero ja tyyppi, tai etsi nimellä hae_eu_saadoksia-työkalulla.`,
     );
   }
@@ -315,7 +130,7 @@ async function loadDoc(celex, lang) {
   const build = async () => {
     const text = await fetchDocument(celex, lang, DOC_TTL);
     if (text === null) {
-      throw new UserError(
+      throw new NotFoundError(
         `Tekstiä ${celex} ei ole saatavilla HTML-muodossa kielellä ${lang}. Osa vanhemmista alkuperäisistä teksteistä on julkaisutoimiston aineistossa vain PDF:nä. ` +
           `Kokeile konsolidoitua tekstiä (jätä versio pois), toista kieltä tai lue teksti EUR-Lexistä: ${eurlexUrl(celex, lang)}`,
       );
@@ -442,14 +257,37 @@ async function loadAct(args) {
   if (hit) return { lang, ...hit };
   const celex = await resolveAct(args);
   const [info, versions] = await Promise.all([workInfo(celex, lang), consolidatedVersions(celex)]);
-  if (!info) throw new UserError(`Säädöksen ${celex} tietoja ei löytynyt.`);
+  if (!info) throw new NotFoundError(`Säädöksen ${celex} tietoja ei löytynyt.`);
   await putDerived([[key, { celex, info, versions }]], ACT_TTL);
   return { lang, celex, info, versions };
 }
 
 // ---------- Toteutukset ----------
 
-async function haeEuSaadoksia(args) {
+// Hakulistat (hae_eu_saadoksia, hae_eu_tuomioita, hae_eu_ehdotuksia) palauttavat datan; teksti muotoillaan datasta.
+// Lähde sivuttaa (10 riviä sivulla, kysely hakee 11:nnen rivin seuraavan sivun tunnistamiseksi), joten kokonaismäärä
+// ei ole tiedossa: sivuja on sivu + 1, jos seuraava sivu on olemassa. Tyhjällä liian suurella sivulla sivuja on
+// max(1, sivu - 1), eli vain sivut, joilla tiedetään olevan tuloksia.
+const PAGE_SIZE = 10;
+
+export const CELLAR_SOURCE = {
+  nimi: "EU:n julkaisutoimisto, Cellar (sama aineisto kuin EUR-Lexissä)",
+  linkki: "https://publications.europa.eu/webapi/rdf/sparql",
+};
+
+const pageInfo = (page, rows) => {
+  if (rows.length === 0) {
+    const s = sivutieto({ sivu: page });
+    return { sivu: s.sivu, sivuja: Math.max(1, s.sivu - 1), seuraava: null };
+  }
+  const s = sivutieto({ sivu: page, sivuja: rows.length > PAGE_SIZE ? page + 1 : page });
+  return { sivu: s.sivu, sivuja: s.sivuja, seuraava: s.seuraava };
+};
+
+/** Data-olion kentät ilman tyhjiä (undefined, null): valinnaiset kentät jätetään pois rakenteisesta tuloksesta. */
+const compact = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined && v !== null));
+
+export async function haeEuSaadoksia(args) {
   const lang = asLang(args.kieli);
   const page = Math.max(1, Number(args.sivu) || 1);
   if (args.tyyppi && !TYPE_LETTER[args.tyyppi]) throw new UserError("Tyyppi on asetus, direktiivi tai paatos.");
@@ -463,19 +301,34 @@ async function haeEuSaadoksia(args) {
     page,
   });
   if (rows === null) throw new UserError("Anna hakusana.");
-  if (!rows.length) {
+  const saadokset = rows.slice(0, PAGE_SIZE).map((r) =>
+    compact({
+      tunnus: shortId(r.celex),
+      celex: r.celex,
+      paiva: r.date,
+      voimassa: r.inForce,
+      nimi: String(r.title ?? "").slice(0, 400),
+      linkki: eurlexUrl(r.celex, lang),
+    }),
+  );
+  return { saadokset, ...pageInfo(page, rows), lahde: CELLAR_SOURCE };
+}
+
+export function haeEuSaadoksiaTeksti(data) {
+  const page = data.sivu;
+  if (!data.saadokset.length) {
     return page > 1 ? "Ei enempää tuloksia." : "Ei osumia. Kokeile sanan vartaloa (esim. \"tietosuoj\"), vähempiä sanoja tai vain_voimassa=false.";
   }
-  const lines = rows.slice(0, 10).map(
-    (r) => `${shortId(r.celex)} (CELEX ${r.celex}), ${fmtDate(r.date)}${r.inForce === false ? ", EI voimassa" : ""}\n  ${r.title.slice(0, 400)}`,
+  const lines = data.saadokset.map(
+    (r) => `${r.tunnus} (CELEX ${r.celex}), ${fmtDate(r.paiva)}${r.voimassa === false ? ", EI voimassa" : ""}\n  ${r.nimi}`,
   );
   let out = `EU-säädökset (sivu ${page}, uusimmasta vanhimpaan):\n\n` + lines.join("\n\n");
-  if (rows.length > 10) out += `\n\nLisää tuloksia: hae sivu ${page + 1}.`;
+  if (data.seuraava) out += `\n\nLisää tuloksia: hae sivu ${data.seuraava}.`;
   out += "\n\nHae tiedot eu_saados_tiedot-työkalulla tai teksti hae_eu_artikla-työkalulla (saados: CELEX-numero).";
   return out;
 }
 
-async function euSaadosTiedot(args) {
+export async function euSaadosTiedot(args) {
   if (/^\s*COM\b/i.test(String(args.saados ?? "")) || /^5\d{4}(PC|DC)/i.test(String(args.saados ?? "").trim())) {
     return euEhdotus({ ehdotus: args.saados, kieli: args.kieli });
   }
@@ -516,7 +369,7 @@ async function euSaadosTiedot(args) {
   return clip(out.join("\n"));
 }
 
-async function haeEuArtikla(args) {
+export async function haeEuArtikla(args) {
   const given = ["artikla", "johdanto_kappale", "liite"].filter((k) => args[k] !== undefined && args[k] !== "");
   if (given.length !== 1) throw new UserError("Anna yksi: artikla, johdanto_kappale tai liite. Sisällysluettelo: eu_saados_tiedot.");
   const what = given[0];
@@ -535,7 +388,7 @@ async function haeEuArtikla(args) {
   if (!item) {
     const names = { artikla: "Artiklaa", liite: "Liitettä", johdanto_kappale: "Johdanto-osan perustelukappaletta" };
     const avail = list.map((x) => x.n).slice(0, 250);
-    throw new UserError(
+    throw new NotFoundError(
       `${names[what]} ${args[what]} ei löytynyt tekstistä (${ver.kind === "consolidated" ? `konsolidoitu ${fmtDate(ver.date)}` : "alkuperäinen"}). ` +
         (avail.length ? `Saatavilla: ${avail.join(", ")}.` : "Tekstistä ei tunnistettu tällaisia osia."),
     );
@@ -546,10 +399,27 @@ async function haeEuArtikla(args) {
   const out = [header(info, ver, lang), "", text];
   const legend = legendFor(b, text);
   if (legend) out.push("", legend);
-  return clip(out.join("\n"));
+  // Sanatarkka teksti pysyy tekstinä (kenttä teksti jätetään pois rakenteisesta tuloksesta); rakenteessa vain
+  // tunnus, versio ja Lähde-linkki.
+  const kind = info.celex.startsWith("5") ? "ehdotus" : ver.kind === "consolidated" ? "konsolidoitu" : "alkuperainen";
+  return {
+    teksti: clip(out.join("\n")),
+    saados: compact({ tunnus: shortId(info.celex), celex: info.celex, nimi: info.title ? String(info.title).slice(0, 400) : null, voimassa: info.inForce }),
+    versio: compact({
+      laji: kind,
+      celex: ver.celex,
+      paiva: kind === "konsolidoitu" ? ver.date : null,
+      tulevat: kind !== "ehdotus" && ver.future?.length ? ver.future.map((v) => v.date) : null,
+    }),
+    osa: { laji: what, numero: String(item.n) },
+    kieli: lang,
+    lahde: { nimi: CELLAR_SOURCE.nimi, linkki: eurlexUrl(ver.celex, lang) },
+  };
 }
 
-async function etsiEuSaadoksesta(args) {
+export const haeEuArtiklaTeksti = (data) => data.teksti;
+
+export async function etsiEuSaadoksesta(args) {
   const q = String(args.hakusana ?? "").trim();
   if (q.length < 3) throw new UserError("Hakusanan pitää olla vähintään 3 merkkiä.");
   const { lang, celex, info, versions } = await loadAct(args);
@@ -598,37 +468,57 @@ function locationsText(interprets) {
     .map((x) => `${shortId(x.celex)}${x.locations.length ? `: ${[...new Set(x.locations.map(fmtLocation))].join("; ")}` : ""}`);
 }
 
-async function haeEuTuomioita(args) {
+export async function haeEuTuomioita(args) {
   const lang = asLang(args.kieli);
   const page = Math.max(1, Number(args.sivu) || 1);
   let rows;
-  let heading;
+  let haku;
   if (args.saados) {
     const act = await loadAct(args);
     rows = await casesInterpreting({ actCelex: act.celex, article: args.artikla, from: args.alkaen_vuosi, lang, page });
     if (rows === null) throw new UserError("Anna artikla numerona, esim. \"6\" tai \"10 a\".");
-    heading = `Tuomiot, jotka tulkitsevat säädöstä ${shortId(act.celex)}${args.artikla ? `, ${args.artikla} artikla` : ""}`;
+    haku = compact({ saados: shortId(act.celex), celex: act.celex, artikla: args.artikla ? String(args.artikla) : null });
   } else if (args.hakusana) {
     rows = await searchCases({ words: args.hakusana, from: args.alkaen_vuosi, lang, page });
     if (rows === null) throw new UserError("Anna hakusana.");
-    heading = `Tuomiot hakusanalla "${args.hakusana}"`;
+    haku = { hakusana: String(args.hakusana) };
   } else {
     throw new UserError("Anna säädös (ja halutessasi artikla) tai hakusana.");
   }
-  if (!rows.length) {
+  const tuomiot = rows.slice(0, PAGE_SIZE).map((r) => {
+    const t = caseTitleParts(r.title);
+    return compact({
+      asia: caseNumber(r.jc),
+      celex: r.jc,
+      paiva: r.date,
+      ecli: r.ecli || null,
+      otsikko: t.head,
+      kuvaus: t.rest.join(" ").slice(0, 300),
+      tulkitut_kohdat: r.locations?.length ? [...new Set(r.locations.map(fmtLocation))] : null,
+      linkki: eurlexUrl(r.jc, lang),
+    });
+  });
+  return { haku, tuomiot, ...pageInfo(page, rows), lahde: CELLAR_SOURCE };
+}
+
+export function haeEuTuomioitaTeksti(data) {
+  const page = data.sivu;
+  if (!data.tuomiot.length) {
     return page > 1
       ? "Ei enempää tuloksia."
-      : args.saados
+      : data.haku.celex
         ? "Tuomioita ei löytynyt. Tulkintatiedot ovat julkaisutoimiston luokittelua; kokeile ilman artiklaa tai hakusanalla."
         : "Ei osumia. Kokeile sanan vartaloa tai asianosaisen nimeä.";
   }
-  const lines = rows.slice(0, 10).map((r) => {
-    const t = caseTitleParts(r.title);
-    const locs = r.locations?.length ? `\n  Tulkitut kohdat: ${[...new Set(r.locations.map(fmtLocation))].join("; ")}` : "";
-    return `${caseNumber(r.jc)} (${fmtDate(r.date)}${r.ecli ? `, ${r.ecli}` : ""}) ${t.head}\n  ${t.rest.join(" ").slice(0, 300)}${locs}`;
+  const heading = data.haku.celex
+    ? `Tuomiot, jotka tulkitsevat säädöstä ${data.haku.saados}${data.haku.artikla ? `, ${data.haku.artikla} artikla` : ""}`
+    : `Tuomiot hakusanalla "${data.haku.hakusana}"`;
+  const lines = data.tuomiot.map((r) => {
+    const locs = r.tulkitut_kohdat?.length ? `\n  Tulkitut kohdat: ${r.tulkitut_kohdat.join("; ")}` : "";
+    return `${r.asia} (${fmtDate(r.paiva)}${r.ecli ? `, ${r.ecli}` : ""}) ${r.otsikko}\n  ${r.kuvaus}${locs}`;
   });
   let out = `${heading} (sivu ${page}, uusimmasta vanhimpaan):\n\n${lines.join("\n\n")}`;
-  if (rows.length > 10) out += `\n\nLisää tuloksia: hae sivu ${page + 1}.`;
+  if (data.seuraava) out += `\n\nLisää tuloksia: hae sivu ${data.seuraava}.`;
   out += "\n\nHae tuomio eu_tuomio-työkalulla (asianumero).";
   return out;
 }
@@ -638,11 +528,11 @@ async function resolveCase(args) {
   if (r.error) throw new UserError(r.error);
   if (r.ecli) {
     const c = await celexByEcli(r.ecli);
-    if (!c) throw new UserError(`Tuomiota ${r.ecli} ei löytynyt.`);
+    if (!c) throw new NotFoundError(`Tuomiota ${r.ecli} ei löytynyt.`);
     return c;
   }
   const found = await existing(r.candidates);
-  if (!found.length) throw new UserError(`Tuomiota tai määräystä ${args.tuomio} ei löytynyt. Tarkista asianumero, tai etsi hae_eu_tuomioita-työkalulla.`);
+  if (!found.length) throw new NotFoundError(`Tuomiota tai määräystä ${args.tuomio} ei löytynyt. Tarkista asianumero, tai etsi hae_eu_tuomioita-työkalulla.`);
   return found[0];
 }
 
@@ -659,11 +549,11 @@ function parseRanges(s) {
   return [...new Set(out)].sort((x, y) => x - y);
 }
 
-async function euTuomio(args) {
+export async function euTuomio(args) {
   const lang = asLang(args.kieli);
   const celex = await resolveCase(args);
   const [info, doc] = await Promise.all([caseInfo(celex, lang), loadDoc(celex, lang)]);
-  if (!info) throw new UserError(`Tuomion ${celex} tietoja ei löytynyt.`);
+  if (!info) throw new NotFoundError(`Tuomion ${celex} tietoja ei löytynyt.`);
   const b = doc.base;
   const j = b.judgment;
   const t = caseTitleParts(info.title);
@@ -754,11 +644,11 @@ async function resolveProposal(v) {
   const cands = /^5\d{4}(PC|DC)\d{4}/.test(up) ? [up] : parseComRef(raw);
   if (!cands) throw new UserError(`Ehdotusta "${raw}" ei tunnistettu. Anna muodossa "COM(2021) 206" tai CELEX-numerona (52021PC0206).`);
   const found = await existing(cands);
-  if (!found.length) throw new UserError(`Asiakirjaa ${cands.map(shortId)[0]} ei löytynyt. Etsi ehdotuksia hae_eu_ehdotuksia-työkalulla.`);
+  if (!found.length) throw new NotFoundError(`Asiakirjaa ${cands.map(shortId)[0]} ei löytynyt. Etsi ehdotuksia hae_eu_ehdotuksia-työkalulla.`);
   return found[0];
 }
 
-async function haeEuEhdotuksia(args) {
+export async function haeEuEhdotuksia(args) {
   const lang = asLang(args.kieli);
   const tila = args.tila;
   if (tila && !["vireilla", "hyvaksytty"].includes(tila)) throw new UserError("tila: vireilla tai hyvaksytty.");
@@ -767,23 +657,41 @@ async function haeEuEhdotuksia(args) {
   if (!args.hakusana && !from && !to && !tila) throw new UserError("Anna hakusana, vuosi tai tila (esim. tila: vireilla).");
   const page = Math.max(1, Number.parseInt(args.sivu, 10) || 1);
   const rows = await searchProposals({ words: args.hakusana, from, to, tila, lang, page });
-  if (!rows.length) return page > 1 ? "Ei enempää tuloksia." : "Ei osumia. Kokeile sanan vartaloa (esim. \"kosmeettis\"), toista sanaa tai laajempaa vuosiväliä.";
+  const ehdotukset = rows.slice(0, PAGE_SIZE).map((r) =>
+    compact({
+      tunnus: shortId(r.celex),
+      celex: r.celex,
+      paiva: r.date,
+      menettelyt: r.procs,
+      tila: r.status.length ? STATUS_FI[r.status[0]] ?? r.status[0] : null,
+      tilakoodi: r.status[0] ?? null,
+      hyvaksytyt: r.adopted.map((c) => ({ tunnus: shortId(c), celex: c })),
+      nimi: String(r.title).replace(/\s+/g, " ").slice(0, 400),
+      linkki: eurlexUrl(r.celex, lang),
+    }),
+  );
+  return { ehdotukset, ...pageInfo(page, rows), lahde: CELLAR_SOURCE };
+}
+
+export function haeEuEhdotuksiaTeksti(data) {
+  const page = data.sivu;
+  if (!data.ehdotukset.length) return page > 1 ? "Ei enempää tuloksia." : "Ei osumia. Kokeile sanan vartaloa (esim. \"kosmeettis\"), toista sanaa tai laajempaa vuosiväliä.";
   const out = [`Komission säädösehdotukset (sivu ${page}, uusimmasta vanhimpaan):`, ""];
-  for (const r of rows.slice(0, 10)) {
-    const bits = [fmtDate(r.date), r.procs.length ? `menettely ${r.procs.join(", ")}` : null, r.status.length ? STATUS_FI[r.status[0]] ?? r.status[0] : null, r.adopted.length ? `säädös ${r.adopted.map(shortId).join(", ")}` : null].filter(Boolean);
-    out.push(`${shortId(r.celex)} (CELEX ${r.celex}), ${bits.join(", ")}`);
-    out.push(`  ${String(r.title).replace(/\s+/g, " ").slice(0, 400)}`);
+  for (const r of data.ehdotukset) {
+    const bits = [fmtDate(r.paiva), r.menettelyt.length ? `menettely ${r.menettelyt.join(", ")}` : null, r.tila ?? null, r.hyvaksytyt.length ? `säädös ${r.hyvaksytyt.map((h) => h.tunnus).join(", ")}` : null].filter(Boolean);
+    out.push(`${r.tunnus} (CELEX ${r.celex}), ${bits.join(", ")}`);
+    out.push(`  ${r.nimi}`);
   }
-  if (rows.length > 10) out.push("", `Lisää tuloksia: sivu ${page + 1}.`);
+  if (data.seuraava) out.push("", `Lisää tuloksia: sivu ${data.seuraava}.`);
   out.push("", "Menettelyn vaiheet eu_ehdotus-työkalulla; ehdotuksen artiklat hae_eu_artikla-työkalulla (saados: \"COM(vuosi) numero\"). Vanhoilla ehdotuksilla menettelytietoja ei aina ole.");
   return clip(out.join("\n"));
 }
 
-async function euEhdotus(args) {
+export async function euEhdotus(args) {
   const lang = asLang(args.kieli);
   const celex = await resolveProposal(args.ehdotus);
   const info = await proposalInfo(celex, lang);
-  if (!info) throw new UserError(`Ehdotuksen ${shortId(celex)} tietoja ei löytynyt.`);
+  if (!info) throw new NotFoundError(`Ehdotuksen ${shortId(celex)} tietoja ei löytynyt.`);
   const out = [String(info.title).replace(/\s+/g, " ").trim() || shortId(celex)];
   out.push(`Tunnus: ${shortId(celex)}, CELEX ${celex}${info.titleLang !== lang ? " (nimi englanniksi; kieliversiota ei ole)" : ""}.`);
   if (info.date) out.push(`Annettu: ${fmtDate(info.date)}${info.dg ? `, valmistellut ${info.dg}` : ""}.`);
@@ -872,7 +780,7 @@ function alertText(a) {
   return lines.join("\n");
 }
 
-async function tuotevaroitukset(args) {
+export async function tuotevaroitukset(args) {
   const weeks = Math.min(52, Math.max(1, Number.parseInt(args.viikkoja, 10) || 8));
   const q = foldText(args.hakusana).trim();
   const cat = foldText(args.kategoria).trim();
@@ -968,7 +876,7 @@ function toIso2(v) {
 const EUDAMED_NOTE =
   "EUDAMED sisältää vain rekisteröidyt laitteet ja toimijat, ja haku vaatii tarkan tunnuksen. Se, ettei laitetta löydy, ei yksin tarkoita, ettei laite olisi markkinakelpoinen. Suomessa toimivaltainen viranomainen on Fimea.";
 
-async function euLaiterekisteri(args) {
+export async function euLaiterekisteri(args) {
   const di = String(args.udi_di ?? "").trim();
   const basic = String(args.basic_udi ?? "").trim();
   const srn = String(args.srn ?? "").trim();
@@ -1021,31 +929,11 @@ async function euLaiterekisteri(args) {
   throw new UserError("Anna udi_di, basic_udi, srn tai valmistaja (ja tarvittaessa maa).");
 }
 
-const HANDLERS = {
-  hae_eu_saadoksia: haeEuSaadoksia,
-  eu_saados_tiedot: euSaadosTiedot,
-  hae_eu_artikla: haeEuArtikla,
-  etsi_eu_saadoksesta: etsiEuSaadoksesta,
-  hae_eu_tuomioita: haeEuTuomioita,
-  eu_tuomio: euTuomio,
-  hae_eu_ehdotuksia: haeEuEhdotuksia,
-  eu_ehdotus: euEhdotus,
-  tuotevaroitukset,
-  eu_laiterekisteri: euLaiterekisteri,
-};
+// Virheet: UserError (syötteen muoto tai valinta) ja NotFoundError (tunnusta, osaa tai tietoja ei löytynyt) näytetään
+// sellaisinaan, SourceError lähteen nimellä ja tilalla (tyokalut.js). Muut poikkeukset piilottaa yhteinen runko.
+class NotFoundError extends UserError {}
 
-export async function callTool(name, args = {}) {
-  const fn = HANDLERS[name];
-  if (!fn) return { isError: true, content: [{ type: "text", text: `Tuntematon työkalu: ${name}` }] };
-  try {
-    return { content: [{ type: "text", text: await fn(args ?? {}) }] };
-  } catch (e) {
-    const msg =
-      e instanceof UserError
-        ? e.message
-        : e instanceof SourceError
-          ? `${name === "tuotevaroitukset" ? "Safety Gate -palvelu" : name === "eu_laiterekisteri" ? "EUDAMED-rajapinta" : "EU:n julkaisutoimiston rajapinta"} ei vastannut (${e.message}). Yritä hetken päästä uudelleen.`
-          : `Odottamaton virhe: ${e?.message ?? e}`;
-    return { isError: true, content: [{ type: "text", text: msg }] };
-  }
-}
+/** Lähteen nimi lähdevirheen tekstissä työkalun mukaan; muilla EU:n julkaisutoimiston rajapinta. */
+export const SOURCE_NAMES = { tuotevaroitukset: "Safety Gate -palvelu", eu_laiterekisteri: "EUDAMED-rajapinta" };
+
+export { UserError, NotFoundError, SourceError };
