@@ -66,6 +66,14 @@ Säädöksen voi antaa numerona (`2016/679`, `93/13/ETY`, `asetus (EY) N:o 1907/
 - Kaikilla työkaluilla on MCP-merkinnät `readOnlyHint: true` ja `destructiveHint: false`.
 - Yhden vastauksen enimmäispituus on 50 000 merkkiä.
 
+## Rakenteinen tulos ja yhteinen runko
+
+- MCP-protokolla, Origin- ja protokollaversion tarkistus, käyttörajan vastaus ja virheiden piilotus tulevat yhteisestä rungosta (`src/mcp-runko.js`, mcp-runko 1.1.0, MIT). Kopiota ei muokata tässä repossa. Runko tukee myös protokollaa 2026-07-28 vanhojen versioiden rinnalla.
+- Hakulistat `hae_eu_saadoksia`, `hae_eu_tuomioita` ja `hae_eu_ehdotuksia` antavat tekstin rinnalla rakenteisen tuloksen (`structuredContent`, kuvattu `outputSchema`ssa): rivilista (`saadokset`, `tuomiot`, `ehdotukset`, jokaisella rivillä Lähde-linkki), sivutus (`sivu`, `sivuja`, `seuraava`; kokonaismäärää lähde ei kerro) ja `lahde`. Sivulla on enintään 10 riviä, ja seuraava sivu haetaan parametrilla `sivu`.
+- `hae_eu_artikla` antaa sanatarkan tekstin vain tekstinä; rakenteisessa tuloksessa ovat säädöksen tunnus, version laji ja päivä, tulevat versiot, haettu osa ja Lähde-linkki. Muut työkalut antavat tekstin.
+- Virhe on `isError`-tulos, jossa on rakenteinen `virhe: { koodi, viesti }`: `syote` (syötteen muoto), `ei_loydy` (tunnusta tai osaa ei löytynyt), `lahde` (lähde ei vastannut; `lahteen_koodi` on HTTP-tila) tai `yleinen` (odottamaton virhe, sisäistä tekstiä ei näytetä).
+- Työkalujen määrittelyt ovat tiedostossa `src/tyokalut.js` (kaikilla oikeus `luku`) ja logiikka tiedostoissa `src/tools.js`, `src/cellar.js`, `src/doc.js` ja `src/products.js`. Savutesti ajaa palvelimen rungon testitilassa (`tarkistaTulokset`), joka tarkistaa jokaisen rakenteisen tuloksen skeemaa vasten.
+
 ## Kehitys
 
 ```
