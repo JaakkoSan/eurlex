@@ -243,6 +243,9 @@ for (const t of TOOLS) {
 
 class UserError extends Error {}
 
+// Odottamattoman poikkeuksen tilalla näytettävä teksti (sama kuin yhteisessä rungossa).
+const YLEINEN_VIRHE = "Haku epäonnistui. Yritä hetken päästä uudelleen.";
+
 const lc1 = (s) => (s ? s[0].toLowerCase() + s.slice(1) : s);
 const asLang = (v) => (v === "sv" || v === "en" ? v : "fi");
 
@@ -1045,7 +1048,12 @@ export async function callTool(name, args = {}) {
         ? e.message
         : e instanceof SourceError
           ? `${name === "tuotevaroitukset" ? "Safety Gate -palvelu" : name === "eu_laiterekisteri" ? "EUDAMED-rajapinta" : "EU:n julkaisutoimiston rajapinta"} ei vastannut (${e.message}). Yritä hetken päästä uudelleen.`
-          : `Odottamaton virhe: ${e?.message ?? e}`;
+          : null;
+    if (msg === null) {
+      // Odottamaton poikkeus: sisäistä tekstiä ei näytetä eikä kirjata (voi sisältää rajapintojen tietoja).
+      console.error("tyokalu:", name, e?.name ?? "virhe");
+      return { isError: true, content: [{ type: "text", text: YLEINEN_VIRHE }] };
+    }
     return { isError: true, content: [{ type: "text", text: msg }] };
   }
 }
