@@ -1,4 +1,4 @@
-// mcp-runko 1.1.0 sha256:8b47c8176dfcf730e0bb88e59a6acfa1427c58f27f41a7533c7a183e01d04807. Älä muokkaa tässä repossa: tämä on kopio yhteisestä rungosta (MIT).
+// mcp-runko 1.1.0 sha256:f6abccfd7d946c47007a98c55d9ea6bc380883b52818d24a1b6bcaaba096e8a0. Älä muokkaa tässä repossa: tämä on kopio yhteisestä rungosta (MIT).
 // mcp-runko: MCP-liitinten yhteinen runko (Streamable HTTP, tilaton, JSON-vastaukset) Cloudflare Workerissa.
 // MIT-lisenssi. Ei riippuvuuksia. Toimii Workerissa ja Node 22:ssa (Web Crypto, Request, Response).
 //
@@ -571,6 +571,17 @@ function virheTulos(t, teksti, koodi, lahteen_koodi) {
 
 // ---------- palvelin ----------
 
+/**
+ * Kutsujan antama nimi (työkalu tai metodi) vastaustekstiin: ohjausmerkit välilyönneiksi ja enintään n merkkiä, jotta
+ * pitkä tai rivinvaihdollinen teksti ei heijastu mallin kontekstiin. Muu kuin merkkijono -> "(ei nimeä)".
+ */
+export function naytettavaNimi(nimi, n = 60) {
+  return typeof nimi === "string" ? nimi.replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, n) : "(ei nimeä)";
+}
+
+/** Lokiin vain lyhennetty nimi tai tyyppi, ei kutsujan oliota. */
+const lokiNimi = (nimi) => (typeof nimi === "string" ? nimi.slice(0, 60) : typeof nimi);
+
 const PV = "io.modelcontextprotocol/protocolVersion";
 const CC = "io.modelcontextprotocol/clientCapabilities";
 const SI = "io.modelcontextprotocol/serverInfo";
@@ -668,7 +679,7 @@ export function luoPalvelin(a) {
     return kaikkiMaarittelyt.filter((m) => nakyy(m?.name, oikeudet));
   }
 
-  const tuntematon = (nimi) => ({ isError: true, content: [{ type: "text", text: `Tuntematon työkalu: ${nimi}` }] });
+  const tuntematon = (nimi) => ({ isError: true, content: [{ type: "text", text: `Tuntematon työkalu: ${naytettavaNimi(nimi)}` }] });
 
   async function kutsuUutta(t, args, ctx) {
     let tulos;
@@ -713,7 +724,7 @@ export function luoPalvelin(a) {
         return { isError: true, content: [{ type: "text", text: e.message }] };
       }
       // Sisäistä virhetekstiä ei näytetä eikä kirjata (voi sisältää kantojen tai rajapintojen tietoja).
-      console.error("tyokalu:", nimi, e?.name ?? "virhe");
+      console.error("tyokalu:", lokiNimi(nimi), e?.name ?? "virhe");
       return { isError: true, content: [{ type: "text", text: YLEINEN_VIRHE }] };
     }
   }
@@ -768,7 +779,7 @@ export function luoPalvelin(a) {
         return ok(msg.id, { prompts: [] });
       default:
         if (ilmoitus) return null;
-        return rpcError(msg.id, -32601, `Method not found: ${method}`);
+        return rpcError(msg.id, -32601, `Method not found: ${naytettavaNimi(method, 80)}`);
     }
   }
 
@@ -849,7 +860,7 @@ export function luoPalvelin(a) {
         return json(ok(id, valmis(await tyokaluKutsu(body.params, ctx))));
       default:
         // Ei ping- eikä initialize-metodia tässä versiossa.
-        return virhe(404, id, -32601, `Method not found: ${body.method.slice(0, 80)}`);
+        return virhe(404, id, -32601, `Method not found: ${naytettavaNimi(body.method, 80)}`);
     }
   }
 
