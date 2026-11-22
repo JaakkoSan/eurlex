@@ -1,4 +1,4 @@
-// mcp-runko 1.1.0 sha256:fd0438546543cfdaf5e41831955134587430bb3d21d630d4b274763edd4607f3. Älä muokkaa tässä repossa: muutos tehdään C:\mcp-runko-repoon ja jaetaan komennolla node jaa-runko.mjs (Liittimet).
+// mcp-runko 1.1.0 sha256:8b47c8176dfcf730e0bb88e59a6acfa1427c58f27f41a7533c7a183e01d04807. Älä muokkaa tässä repossa: tämä on kopio yhteisestä rungosta (MIT).
 // mcp-runko: MCP-liitinten yhteinen runko (Streamable HTTP, tilaton, JSON-vastaukset) Cloudflare Workerissa.
 // MIT-lisenssi. Ei riippuvuuksia. Toimii Workerissa ja Node 22:ssa (Web Crypto, Request, Response).
 //
@@ -163,7 +163,7 @@ const kokonais = (x, oletus) => {
 
 /**
  * Muistilistan sivutus: { rivit, sivu, sivuja, yhteensa, seuraava }; seuraava on seuraavan sivun numero tai null.
- * koko rajataan väliin 1–enintaan; liian suuri sivu antaa viimeisen sivun. Sama palautus kuin varaa-mcp:n sivuta().
+ * koko rajataan väliin 1–enintaan; liian suuri sivu antaa viimeisen sivun. Sama palautusmuoto kuin liittimien omissa sivutusfunktioissa.
  */
 export function sivuta(lista, { sivu = 1, koko = 20, enintaan = 100 } = {}) {
   const rivit0 = Array.isArray(lista) ? lista : [];

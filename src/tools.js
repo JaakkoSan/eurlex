@@ -266,7 +266,8 @@ async function loadAct(args) {
 
 // Hakulistat (hae_eu_saadoksia, hae_eu_tuomioita, hae_eu_ehdotuksia) palauttavat datan; teksti muotoillaan datasta.
 // Lähde sivuttaa (10 riviä sivulla, kysely hakee 11:nnen rivin seuraavan sivun tunnistamiseksi), joten kokonaismäärä
-// ei ole tiedossa: sivuja on sivu + 1, jos seuraava sivu on olemassa.
+// ei ole tiedossa: sivuja on sivu + 1, jos seuraava sivu on olemassa. Tyhjällä liian suurella sivulla sivuja on
+// max(1, sivu - 1), eli vain sivut, joilla tiedetään olevan tuloksia.
 const PAGE_SIZE = 10;
 
 export const CELLAR_SOURCE = {
@@ -275,6 +276,10 @@ export const CELLAR_SOURCE = {
 };
 
 const pageInfo = (page, rows) => {
+  if (rows.length === 0) {
+    const s = sivutieto({ sivu: page });
+    return { sivu: s.sivu, sivuja: Math.max(1, s.sivu - 1), seuraava: null };
+  }
   const s = sivutieto({ sivu: page, sivuja: rows.length > PAGE_SIZE ? page + 1 : page });
   return { sivu: s.sivu, sivuja: s.sivuja, seuraava: s.seuraava };
 };

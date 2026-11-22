@@ -1,7 +1,7 @@
 // EUR-Lex MCP -palvelin (Streamable HTTP, tilaton, JSON-vastaukset) Cloudflare Workerissa.
 //
 // Runko (Origin, protokollaversio, JSON-RPC, julkinen polku, käyttörajan vastaus, virheiden piilotus, rakenteinen
-// virhe) on yhteisessä mcp-runko.js:ssä (kopio JaakkoSan/mcp-runko-reposta, ei muokata tässä repossa).
+// virhe) on yhteisessä mcp-runko.js:ssä (kopio yhteisestä rungosta, MIT; ei muokata tässä repossa).
 // Työkalujen määrittelyt: tyokalut.js; logiikka: tools.js, cellar.js, doc.js ja products.js.
 
 import { luoPalvelin, rajassa } from "./mcp-runko.js";

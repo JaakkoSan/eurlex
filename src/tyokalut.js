@@ -47,10 +47,10 @@ const common = {
 const merkkijono = (description) => ({ type: "string", description });
 const lista = (items, description) => ({ type: "array", items, description });
 
-/** Sivutus: lähde ei kerro kokonaismäärää, joten sivuja on sivu + 1, kun seuraava sivu on olemassa. */
+/** Sivutus: lähde ei kerro kokonaismäärää, joten sivuja on alaraja (sivu + 1, kun seuraava sivu on olemassa). */
 const SIVUTUS = {
   sivu: { type: "integer", minimum: 1, description: "Tämän tuloksen sivu." },
-  sivuja: { type: "integer", minimum: 1, description: "Tiedossa olevat sivut: sivu + 1, jos seuraava sivu on olemassa (kokonaismäärää lähde ei kerro)." },
+  sivuja: { type: "integer", minimum: 1, description: "Vähintään näin monta sivua: sivu + 1, jos seuraava sivu on olemassa; tyhjällä liian suurella sivulla sivu - 1 (vähintään 1). Kokonaismäärää lähde ei kerro." },
   seuraava: { anyOf: [{ type: "integer" }, { type: "null" }], description: "Seuraavan sivun numero (parametri sivu) tai null." },
 };
 
@@ -63,7 +63,7 @@ const taiVirhe = (onnistunut) => ({
 const SAADOS_RIVI = {
   type: "object",
   properties: {
-    tunnus: merkkijono("Säädöksen tunnus, esim. \"asetus (EU) 2016/679\"."),
+    tunnus: merkkijono("Säädöksen tunnus, esim. \"asetus 2016/679\"."),
     celex: merkkijono("CELEX-numero."),
     paiva: merkkijono("Säädöksen päivä (VVVV-KK-PP)."),
     voimassa: { type: "boolean", description: "Onko säädös voimassa (puuttuu, jos tieto puuttuu lähteestä)." },
@@ -201,7 +201,7 @@ export const TYOKALUT = [
         saados: {
           type: "object",
           properties: {
-            tunnus: merkkijono("Säädöksen tai ehdotuksen tunnus."),
+            tunnus: merkkijono("Säädöksen tai ehdotuksen tunnus, esim. \"asetus 2016/679\" tai \"COM(2021) 206\"."),
             celex: merkkijono("Säädöksen CELEX-numero."),
             nimi: merkkijono("Säädöksen nimi (enintään 400 merkkiä)."),
             voimassa: { type: "boolean", description: "Onko säädös voimassa (puuttuu, jos tieto puuttuu lähteestä)." },
